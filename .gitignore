@@ -11,6 +11,8 @@ NOTES.local.md
 runs/
 *.png
 !docs/**/*.png
+# Scene assets the renderer needs are source, not output.
+!isaac/assets/*.png
 
 # python
 __pycache__/
