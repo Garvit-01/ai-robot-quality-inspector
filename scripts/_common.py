@@ -87,13 +87,24 @@ def require_env(name: str) -> str:
     return value
 
 
+#: One Token Factory key serves both the planner and the verifier in Tier 1. Asking for it
+#: three times in .env is three chances to paste it wrong, so the per-role variables are
+#: optional and fall back to this. They matter in Tier 2, when the verifier moves to its own
+#: fine-tuned endpoint with its own credentials.
+SHARED_KEY_ENV = "NEBIUS_TOKEN_FACTORY_KEY"
+
+
 def client_for(section: dict):
     """Build an OpenAI-compatible client from a config section's *_env indirection."""
     from openai import OpenAI
 
+    api_key = os.environ.get(section["api_key_env"], "").strip()
+    if not api_key:
+        api_key = require_env(SHARED_KEY_ENV)
+
     return OpenAI(
         base_url=require_env(section["base_url_env"]),
-        api_key=require_env(section["api_key_env"]),
+        api_key=api_key,
         timeout=section.get("timeout_s", 20),
     )
 
