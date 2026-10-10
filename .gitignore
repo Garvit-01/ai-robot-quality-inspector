@@ -1,0 +1,36 @@
+# secrets
+.env
+
+# private planning docs — the build spec, process notes, time budget, milestones.
+# This repo is public; internal planning stays local.
+SPEC.md
+NOTES.local.md
+*.local.md
+
+# run artifacts (logs, frames, metrics) — never commit
+runs/
+*.png
+!docs/**/*.png
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ros2 / colcon
+build/
+install/
+log/
+
+# fine-tune artifacts
+finetune/data/
+finetune/checkpoints/
+*.safetensors
+*.bin
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
