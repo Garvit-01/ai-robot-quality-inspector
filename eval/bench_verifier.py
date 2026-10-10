@@ -44,6 +44,17 @@ from _common import (  # noqa: E402
 )
 
 GO_THRESHOLD = 0.85     # SPEC M2: needed on CP_POST_LIFT and CP_POST_PLACE
+
+# The kind of recovery each verdict leads to. Strict failure-type accuracy is the headline;
+# this is a SECONDARY metric for the cell's behaviour: calling a defective part "wrong" still
+# sends it to the bin, while calling a misaligned seat "fine" ships a bad part.
+ACTION = {
+    "none": "continue",
+    "part_displaced": "regrasp", "empty_grasp": "regrasp", "part_dropped_recoverable": "regrasp",
+    "misaligned_seat": "reseat",
+    "wrong_part": "reject", "defective_part": "reject",
+    "part_dropped_unrecoverable": "stop", "unclear": "stop",
+}
 NO_GO_THRESHOLD = 0.70  # any checkpoint below this: change camera/crop, or cut the fault
 
 
@@ -118,14 +129,19 @@ def summarise(rows: list[dict]) -> dict:
     def block(rs: list[dict]) -> dict:
         n = len(rs)
         parsed = [r for r in rs if r["pred"]]
-        ft = sum(r["pred"] and r["pred"]["failure_type"] == r["exp"]["failure_type"] for r in rs)
-        ok = sum(r["pred"] and r["pred"]["step_ok"] == r["exp"]["step_ok"] for r in rs)
-        loc = sum(r["pred"] and r["pred"]["location_hint"] == r["exp"]["location_hint"] for r in rs)
+        # Count over `parsed` but divide by `n`: an unparseable reply is a wrong answer,
+        # never silently excluded. (Summing `r["pred"] and ...` over all rows crashed on the
+        # first unparseable reply, because `None and x` is None.)
+        ft = sum(r["pred"]["failure_type"] == r["exp"]["failure_type"] for r in parsed)
+        ok = sum(r["pred"]["step_ok"] == r["exp"]["step_ok"] for r in parsed)
+        loc = sum(r["pred"]["location_hint"] == r["exp"]["location_hint"] for r in parsed)
+        act = sum(ACTION[r["pred"]["failure_type"]] == ACTION[r["exp"]["failure_type"]] for r in parsed)
         return {
             "n": n,
             "failure_type_acc": pct(ft, n),
             "step_ok_acc": pct(ok, n),
             "location_acc": pct(loc, n),
+            "action_acc": pct(act, n),
             "unclear": sum(1 for r in parsed if r["pred"]["failure_type"] == "unclear"),
             "unparseable": n - len(parsed),
         }
@@ -165,6 +181,7 @@ def render_md(meta: dict, s: dict) -> str:
               f"- Failure type correct: **{o['failure_type_acc']}%**",
               f"- Fault vs no-fault correct (step_ok): **{o['step_ok_acc']}%**",
               f"- Location correct: {o['location_acc']}%",
+              f"- Leads to the right kind of recovery (secondary): {o['action_acc']}%",
               f"- False alarms on clean scenes: {s['false_alarm_rate_on_clean']}% · missed faults: {s['miss_rate_on_faults']}%",
               f"- Answered 'unclear': {o['unclear']} · unparseable: {o['unparseable']}",
               f"- Latency p50 {s['latency_ms']['p50']} ms, p90 {s['latency_ms']['p90']} ms · tokens in {s['tokens']['in']:,}, out {s['tokens']['out']:,}",
@@ -176,11 +193,11 @@ def render_md(meta: dict, s: dict) -> str:
               + ", ".join(f"{k} {v}%" for k, v in g["gate_checkpoints_acc"].items()) + ".",
               f"Checkpoints below {int(NO_GO_THRESHOLD * 100)}%: {', '.join(g['checkpoints_below_no_go']) or 'none'}.", ""]
     for title, key in (("By fault", "by_fault"), ("By checkpoint", "by_checkpoint")):
-        lines += [f"## {title}", "", "| | n | failure type | step_ok | location | unclear | unparseable |",
-                  "|---|---|---|---|---|---|---|"]
+        lines += [f"## {title}", "", "| | n | failure type | step_ok | location | action | unclear | unparseable |",
+                  "|---|---|---|---|---|---|---|---|"]
         for k, b in s[key].items():
             lines.append(f"| {k} | {b['n']} | {b['failure_type_acc']}% | {b['step_ok_acc']}% | "
-                         f"{b['location_acc']}% | {b['unclear']} | {b['unparseable']} |")
+                         f"{b['location_acc']}% | {b['action_acc']}% | {b['unclear']} | {b['unparseable']} |")
         lines.append("")
     lines += ["## Confusion (expected → predicted)", "", "| expected | predicted | count |", "|---|---|---|"]
     for c in s["confusion"]:
