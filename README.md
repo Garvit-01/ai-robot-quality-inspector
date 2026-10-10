@@ -189,11 +189,21 @@ Stated up front because they are the honest frame for every number here.
 
 ## Provenance
 
-The underlying UR5e + Robotiq 2F-85 pick-and-place cell — MoveIt2 config, combined URDF,
-`apriltag_ros` perception off an Isaac Sim camera, TF-based pose lookup — predates this
-hackathon (July–September 2026) and lives in
+This project builds on an **existing** robot cell rather than starting from nothing, and the
+split matters, so here it is explicitly.
+
+**Pre-existing.** The UR5e + Robotiq 2F-85 pick-and-place cell — MoveIt2 configuration,
+combined URDF, `apriltag_ros` perception off an Isaac Sim camera, and TF-based pose lookup —
+was built between **July and September 2026**, beginning before this hackathon's submission
+period opened on August 26, 2026. It lives in a separate repository,
 [`ur5e-vision-pick-place`](https://github.com/Garvit-01/ur5e-vision-pick-place). Scene,
-launch, and config files reused here are noted where they appear.
+launch, and configuration files reused here are noted where they appear.
+
+**New for this hackathon**, all of it after October 10, 2026: the fault staging and
+ground-truth generation, the VLM verifier and its sensor-fusion rules, the recovery planner
+and the code-level guardrails, the four recovery skills, the LoRA fine-tuning pipeline, the
+evaluation harness, and the dashboard. The dated commit history of both repositories
+reflects this.
 
 Everything else is new work for this hackathon: fault staging and ground truth, the
 verifier and its fusion rules, the recovery planner and guardrails, the recovery skills,
