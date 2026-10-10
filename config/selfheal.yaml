@@ -95,7 +95,9 @@ prompts:
       Question: Is the part still held in the gripper?
       If it is not, where did it go? Use part_dropped_recoverable if it is resting on the
       table or carrier within the robot's working area. Use part_dropped_unrecoverable if it
-      has fallen off the table or is clearly outside the working area. Otherwise none.
+      has fallen off the table or is clearly outside the working area. If the gripper is
+      empty and the part is nowhere to be seen in the cell, it has fallen off the table:
+      use part_dropped_unrecoverable with location_hint off_table. Otherwise none.
 
     CP_POST_PLACE: |
       Checkpoint: CP_POST_PLACE. The robot has released the part into the fixture nest and
