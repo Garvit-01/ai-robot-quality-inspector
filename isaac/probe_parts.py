@@ -48,6 +48,7 @@ PARTS = {
     "nut_m16": factory_part("factory_nut_m16_loose"),
     "nut_m12": factory_part("factory_nut_m12_loose"),
     "bolt_m16": factory_part("factory_bolt_m16_loose"),
+    "nut_m20": factory_part("factory_nut_m20_loose"),
 }
 STEEL = f"{ROOT}/NVIDIA/Materials/Base/Metals/Steel_Stainless.mdl"
 # Metal only looks like metal with surroundings to reflect: an indoor workshop HDR.
