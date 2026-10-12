@@ -69,7 +69,11 @@ def test_parameters_stay_inside_spec_ranges():
             assert faults.F3_OFFSET_MM[0] - 0.01 <= off_mm <= faults.F3_OFFSET_MM[1] + 0.01
             assert faults.F3_TILT_DEG[0] <= abs(sc.part_tilt_deg) <= faults.F3_TILT_DEG[1]
         elif sc.fault == "F5":
-            assert faults.F5_CHIP_MM[0] <= sc.chip_mm <= faults.F5_CHIP_MM[1]
+            if sc.defect_type == "chip":
+                assert faults.F5_CHIP_MM[0] <= sc.chip_mm <= faults.F5_CHIP_MM[1]
+                assert sc.chip_corner in faults.CHIP_CORNERS
+            else:
+                assert faults.F5_CRACK_MM[0] <= sc.crack_mm <= faults.F5_CRACK_MM[1]
 
 
 def test_gripper_state_is_physically_consistent():
@@ -97,3 +101,43 @@ def test_scene_serialises_to_json():
 
     for s in (1000, 1001, 1002, 1003, 1004, 1005):
         json.dumps(faults.make_scene(s).to_json())
+
+
+def _sub(fault, attr):
+    from collections import Counter
+    return Counter(getattr(faults.make_scene(s), attr) for s in range(5000, 5120)
+                   if faults.make_scene(s).fault == fault)
+
+
+def test_sub_cases_are_balanced_in_the_eval_split():
+    # 20 scenes per fault in seeds 5000-5119. Sub-cases come from seed // 6, not from
+    # random draws, so they split evenly instead of e.g. 16/9.
+    assert sorted(_sub("F1", "checkpoint").values()) == [10, 10]
+    assert sorted(_sub("F4", "wrong_shape").values()) in ([6, 7, 7], [7, 7, 6])
+    assert sorted(_sub("F5", "defect_type").values()) == [10, 10]
+    assert sorted(_sub("F0", "checkpoint").values()) == [5, 5, 5, 5]
+    drops = _sub("F2", "part_location")
+    assert drops["table"] == 14 and drops["floor"] == 6
+
+
+def test_seated_clean_parts_have_tight_jitter():
+    for s in SEEDS:
+        sc = faults.make_scene(s)
+        if sc.fault == "F0" and sc.checkpoint == "CP_POST_PLACE":
+            assert 1000.0 * math.hypot(*sc.part_offset_m) <= faults.SEATED_JITTER_MM + 1e-6
+            assert abs(sc.part_yaw_deg) <= faults.SEATED_YAW_JITTER_DEG
+
+
+def test_eval_split_is_pinned():
+    """The held-out split must not change by accident. If a deliberate change to
+    faults.py moves this fingerprint, every eval result before it is no longer
+    comparable — bump the split name (eval_v2 -> eval_v3) and update the value."""
+    import hashlib
+    import json
+
+    blob = json.dumps([faults.make_scene(s).to_json() for s in range(5000, 5120)], sort_keys=True)
+    assert hashlib.sha256(blob.encode()).hexdigest()[:16] == EVAL_SPLIT_FINGERPRINT
+
+
+# eval_v2: balanced sub-cases, cracks, camera-facing chips, contact-based seats.
+EVAL_SPLIT_FINGERPRINT = "68348a21b818f733"

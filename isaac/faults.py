@@ -6,18 +6,35 @@ second instead of after a two-minute simulator boot.
 
 The one rule that matters: everything about a scene is derived from its seed. Same seed,
 same scene, same label, on any machine. That is what makes the dataset reproducible and
-lets Tier 1 and Tier 2 be scored on an identical held-out split.
+lets Tier 1 and Tier 2 be scored on an identical held-out split. tests/test_faults.py
+pins a fingerprint of the evaluation split, so an accidental change here can't silently
+reshuffle it.
+
+How a seed maps to a scene:
+  fault     = FAULT_CLASSES[seed % 6]      every 6 consecutive seeds cover F0..F5 once
+  sub-case  = chosen from k = seed // 6    so each fault's variants are balanced too
+  numbers   = drawn from random.Random(seed)   offsets, angles, sizes
 
 Units: metres and degrees. Positions are relative to the named anchor (carrier slot,
-fixture pocket, ...); the scene builder owns absolute world coordinates.
+fixture pocket, ...); isaac/layout.py turns them into world coordinates.
 """
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import asdict, dataclass, field
 
 CHECKPOINTS = ("CP_PRE_GRASP", "CP_POST_LIFT", "CP_POST_TRANSPORT", "CP_POST_PLACE")
 FAULT_CLASSES = ("F0", "F1", "F2", "F3", "F4", "F5")
+WRONG_SHAPES = ("cylinder", "small_cube", "tall_block")
+DEFECT_TYPES = ("chip", "crack")
+
+# Chips go only on the two top corners that face the close-up inspection camera
+# (it sits at +x, -y of the part). On the other two the chip facet is edge-on or faces
+# away, so a single camera physically cannot see it; that would measure camera placement,
+# not the model. A real station would add a second camera. Corner numbering is in
+# geometry.chipped_cube_mesh: 1 = (+x, -y), 2 = (+x, +y).
+CHIP_CORNERS = (1, 2)
 
 # Where the part is expected to be when nothing went wrong, per checkpoint. This is also
 # the location_hint a correct verdict should give for a clean (F0) scene.
@@ -28,25 +45,30 @@ NOMINAL_LOCATION = {
     "CP_POST_PLACE": "fixture",
 }
 
-# Parameter ranges, straight from SPEC.md §7. Kept here as named constants so the tests
-# can assert the generator never leaves them.
+# Parameter ranges, from SPEC.md §7. Named so the tests can assert the generator never
+# leaves them.
 F1_OFFSET_MM = (15.0, 40.0)
 F1_YAW_DEG = (15.0, 45.0)
 F3_OFFSET_MM = (6.0, 15.0)
 F3_TILT_DEG = (5.0, 15.0)
 F5_CHIP_MM = (12.0, 20.0)
-F2_RECOVERABLE_SHARE = 0.7
+F5_CRACK_MM = (22.0, 40.0)
+F2_TABLE_PER_10 = 7  # 7 of every 10 drops land on the table (recoverable), 3 off it
 
 # Small, deliberate nuisance variation on clean scenes. A real carrier never presents a
 # part at exactly 0.0 mm; without this the model could learn "any offset at all = fault".
 NOMINAL_JITTER_MM = 3.0
 NOMINAL_YAW_JITTER_DEG = 4.0
+# A seated part has far less room: 50 mm in a 54 mm pocket. More than about 1 degree of
+# yaw plus the offset would push a corner into the wall.
+SEATED_JITTER_MM = 1.5
+SEATED_YAW_JITTER_DEG = 1.0
 
 
 @dataclass(frozen=True)
 class Expected:
     """The verdict a perfect verifier would return. Mirrors the Verdict schema fields
-    that can be scored; `evidence` and `confidence` are free-form and not scored."""
+    that are scored; `evidence` and `confidence` are free-form and not scored."""
 
     checkpoint: str
     step_ok: bool
@@ -62,17 +84,24 @@ class SceneSpec:
 
     # The part
     part_kind: str  # correct | wrong | defective
-    wrong_shape: str | None  # cylinder | small_cube | tall_block (wrong parts only)
-    chip_mm: float | None  # chip edge length (defective parts only)
-    chip_corner: int | None  # which top corner is chipped, 0-3
+    wrong_shape: str | None  # cylinder | small_cube | tall_block (F4 only)
+    defect_type: str | None  # chip | crack (F5 only)
+    chip_mm: float | None  # chip edge length along each of the corner's 3 edges
+    chip_corner: int | None  # top corner, see CHIP_CORNERS
+    crack_mm: float | None  # crack length across the top face
+    crack_angle_deg: float | None  # crack direction on the top face
     part_location: str  # carrier | gripper | fixture | table | floor
-    part_offset_m: tuple[float, float]  # xy offset from the location's nominal slot
+    part_offset_m: tuple[float, float]  # xy offset from the anchor's nominal spot
     part_yaw_deg: float
-    part_tilt_deg: float  # rotation about the part's local x axis (seat misalignment)
+    part_tilt_deg: float  # seat tilt magnitude; layout.py tilts toward the offset wall
 
-    # The gripper (a two-finger proxy, see SPEC.md)
+    # F2 drops: where in the landing region, as fractions of its width/depth.
+    landing_frac: tuple[float, float] | None
+    floor_side: int | None  # +1 / -1: which long side of the table it fell off
+
+    # The gripper (a two-finger stand-in)
     gripper_at: str  # above_carrier | above_fixture
-    gripper_height_m: float  # fingertip-centre height above the anchor surface
+    gripper_height_m: float  # height of the grasp point (finger-pad centre) above the anchor
     gripper_closed: bool
     gripper_holding: bool
 
@@ -84,139 +113,119 @@ class SceneSpec:
 
 
 def fault_for_seed(seed: int) -> str:
-    """Balanced by construction: every run of 6 consecutive seeds covers F0..F5 once."""
     return FAULT_CLASSES[seed % len(FAULT_CLASSES)]
 
 
-def _signed(rng: random.Random, lo: float, hi: float) -> float:
-    """A magnitude in [lo, hi] with a random sign."""
-    return rng.uniform(lo, hi) * rng.choice((-1.0, 1.0))
-
-
-def _offset_mm_to_xy_m(rng: random.Random, magnitude_mm: float) -> tuple[float, float]:
-    """A planar offset of exactly `magnitude_mm`, in a random direction."""
-    import math
-
+def _offset_xy(rng: random.Random, magnitude_mm: float) -> tuple[float, float]:
+    """A planar offset of exactly `magnitude_mm`, in a random direction, in metres."""
     theta = rng.uniform(0.0, 2.0 * math.pi)
     r = magnitude_mm / 1000.0
-    return (round(r * math.cos(theta), 5), round(r * math.sin(theta), 5))
-
-
-def _jitter(rng: random.Random) -> tuple[float, float]:
-    return _offset_mm_to_xy_m(rng, rng.uniform(0.0, NOMINAL_JITTER_MM))
+    return (round(r * math.cos(theta), 6), round(r * math.sin(theta), 6))
 
 
 def make_scene(seed: int) -> SceneSpec:
     """Derive the complete scene for `seed`. Deterministic and side-effect free."""
     rng = random.Random(seed)
     fault = fault_for_seed(seed)
+    k = seed // len(FAULT_CLASSES)  # sub-case selector, balanced within each fault
 
-    # Defaults describe a clean part waiting on the carrier, gripper hovering above it.
-    part_kind, wrong_shape, chip_mm, chip_corner = "correct", None, None, None
-    part_location = "carrier"
-    part_offset = _jitter(rng)
-    part_yaw = rng.uniform(-NOMINAL_YAW_JITTER_DEG, NOMINAL_YAW_JITTER_DEG)
-    part_tilt = 0.0
-    gripper_at, gripper_height, gripper_closed, gripper_holding = (
-        "above_carrier", 0.15, False, False,
+    f = dict(
+        part_kind="correct", wrong_shape=None, defect_type=None, chip_mm=None,
+        chip_corner=None, crack_mm=None, crack_angle_deg=None,
+        part_location="carrier",
+        part_offset_m=_offset_xy(rng, rng.uniform(0.0, NOMINAL_JITTER_MM)),
+        part_yaw_deg=rng.uniform(-NOMINAL_YAW_JITTER_DEG, NOMINAL_YAW_JITTER_DEG),
+        part_tilt_deg=0.0, landing_frac=None, floor_side=None,
+        gripper_at="above_carrier", gripper_height_m=0.15,
+        gripper_closed=False, gripper_holding=False,
     )
     truth: dict = {}
 
     if fault == "F0":
-        # Clean run. Cycle through all four checkpoints so "no fault" is never confused
-        # with "this checkpoint".
-        checkpoint = CHECKPOINTS[(seed // len(FAULT_CLASSES)) % len(CHECKPOINTS)]
+        # Clean run, cycling through all four checkpoints so "no fault" is never
+        # confused with "this checkpoint".
+        checkpoint = CHECKPOINTS[k % len(CHECKPOINTS)]
         if checkpoint == "CP_POST_LIFT":
-            part_location = "gripper"
-            gripper_height, gripper_closed, gripper_holding = 0.12, True, True
+            f.update(part_location="gripper", gripper_height_m=0.12,
+                     gripper_closed=True, gripper_holding=True)
         elif checkpoint == "CP_POST_TRANSPORT":
-            part_location = "gripper"
-            gripper_at, gripper_height, gripper_closed, gripper_holding = (
-                "above_fixture", 0.12, True, True,
-            )
+            f.update(part_location="gripper", gripper_at="above_fixture",
+                     gripper_height_m=0.12, gripper_closed=True, gripper_holding=True)
         elif checkpoint == "CP_POST_PLACE":
-            part_location = "fixture"
-            part_offset = _offset_mm_to_xy_m(rng, rng.uniform(0.0, 1.5))
-            gripper_at, gripper_height = "above_fixture", 0.15
+            f.update(part_location="fixture", gripper_at="above_fixture",
+                     part_offset_m=_offset_xy(rng, rng.uniform(0.0, SEATED_JITTER_MM)),
+                     part_yaw_deg=rng.uniform(-SEATED_YAW_JITTER_DEG, SEATED_YAW_JITTER_DEG))
         expected = Expected(checkpoint, True, "none", NOMINAL_LOCATION[checkpoint])
 
     elif fault == "F1":
-        # Part shifted on the carrier before the grasp. Half the scenes are caught before
-        # grasping (visible displacement); half are the consequence one step later — the
-        # gripper closed on air and lifted, part still sitting on the carrier.
+        # Part shifted on the carrier before the grasp. Alternates between catching it
+        # before the grasp (visible displacement) and its consequence one step later: the
+        # gripper closed on air and lifted, part still on the carrier.
         offset_mm = rng.uniform(*F1_OFFSET_MM)
-        part_offset = _offset_mm_to_xy_m(rng, offset_mm)
-        part_yaw = _signed(rng, *F1_YAW_DEG)
-        truth = {"offset_mm": round(offset_mm, 2), "yaw_deg": round(part_yaw, 2)}
-        if rng.random() < 0.5:
+        yaw = rng.uniform(*F1_YAW_DEG) * rng.choice((-1.0, 1.0))
+        f.update(part_offset_m=_offset_xy(rng, offset_mm), part_yaw_deg=yaw)
+        truth = {"offset_mm": round(offset_mm, 2), "yaw_deg": round(yaw, 2)}
+        if k % 2 == 0:
             checkpoint = "CP_PRE_GRASP"
             expected = Expected(checkpoint, False, "part_displaced", "carrier")
         else:
             checkpoint = "CP_POST_LIFT"
-            gripper_height, gripper_closed, gripper_holding = 0.12, True, False
+            f.update(gripper_height_m=0.12, gripper_closed=True, gripper_holding=False)
             expected = Expected(checkpoint, False, "empty_grasp", "carrier")
 
     elif fault == "F2":
-        # Slip in transport: gripper arrives over the fixture closed on nothing; the part
-        # is lying somewhere it fell.
+        # Slip in transport: gripper arrives over the fixture closed on nothing.
         checkpoint = "CP_POST_TRANSPORT"
-        gripper_at, gripper_height, gripper_closed, gripper_holding = (
-            "above_fixture", 0.12, True, False,
-        )
-        part_yaw = rng.uniform(0.0, 360.0)
-        if rng.random() < F2_RECOVERABLE_SHARE:
-            part_location = "table"
+        on_table = (k % 10) < F2_TABLE_PER_10
+        f.update(gripper_at="above_fixture", gripper_height_m=0.12, gripper_closed=True,
+                 gripper_holding=False, part_offset_m=(0.0, 0.0),
+                 part_yaw_deg=rng.uniform(0.0, 360.0),
+                 landing_frac=(round(rng.random(), 6), round(rng.random(), 6)))
+        if on_table:
+            f["part_location"] = "table"
             expected = Expected(checkpoint, False, "part_dropped_recoverable", "table_in_reach")
         else:
-            part_location = "floor"
+            f.update(part_location="floor", floor_side=1 if (k // 10) % 2 == 0 else -1)
             expected = Expected(checkpoint, False, "part_dropped_unrecoverable", "off_table")
-        # The builder picks a concrete landing spot inside the named region from this
-        # pair of unit-interval draws; keeps region geometry out of this module.
-        part_offset = (round(rng.random(), 5), round(rng.random(), 5))
-        truth = {"landing_region": part_location}
+        truth = {"landing_region": f["part_location"]}
 
     elif fault == "F3":
-        # Misaligned seat: released, but sitting proud on the rim instead of in the pocket.
+        # Misaligned seat: released, but caught on the rim instead of dropping into the
+        # pocket. layout.py tilts it up on the side it is offset toward and rests it on
+        # the rim and floor by contact, so it never intersects the fixture.
         checkpoint = "CP_POST_PLACE"
-        part_location = "fixture"
         offset_mm = rng.uniform(*F3_OFFSET_MM)
-        part_offset = _offset_mm_to_xy_m(rng, offset_mm)
-        part_tilt = _signed(rng, *F3_TILT_DEG)
-        gripper_at, gripper_height = "above_fixture", 0.15
-        truth = {"offset_mm": round(offset_mm, 2), "tilt_deg": round(part_tilt, 2)}
+        tilt = rng.uniform(*F3_TILT_DEG)
+        f.update(part_location="fixture", gripper_at="above_fixture",
+                 part_offset_m=_offset_xy(rng, offset_mm), part_tilt_deg=tilt,
+                 part_yaw_deg=rng.uniform(-SEATED_YAW_JITTER_DEG, SEATED_YAW_JITTER_DEG))
+        truth = {"offset_mm": round(offset_mm, 2), "tilt_deg": round(tilt, 2)}
         expected = Expected(checkpoint, False, "misaligned_seat", "fixture")
 
     elif fault == "F4":
         checkpoint = "CP_PRE_GRASP"
-        part_kind = "wrong"
-        wrong_shape = rng.choice(("cylinder", "small_cube", "tall_block"))
-        truth = {"wrong_shape": wrong_shape}
+        shape = WRONG_SHAPES[k % len(WRONG_SHAPES)]
+        f.update(part_kind="wrong", wrong_shape=shape)
+        truth = {"wrong_shape": shape}
         expected = Expected(checkpoint, False, "wrong_part", "carrier")
 
     else:  # F5
         checkpoint = "CP_PRE_GRASP"
-        part_kind = "defective"
-        chip_mm = round(rng.uniform(*F5_CHIP_MM), 2)
-        chip_corner = rng.randrange(4)
-        truth = {"chip_mm": chip_mm, "chip_corner": chip_corner}
+        defect = DEFECT_TYPES[k % len(DEFECT_TYPES)]
+        f.update(part_kind="defective", defect_type=defect)
+        if defect == "chip":
+            corner = CHIP_CORNERS[(k // 2) % len(CHIP_CORNERS)]
+            chip = round(rng.uniform(*F5_CHIP_MM), 2)
+            f.update(chip_mm=chip, chip_corner=corner)
+            truth = {"defect": "chip", "chip_mm": chip, "chip_corner": corner}
+        else:
+            length = round(rng.uniform(*F5_CRACK_MM), 2)
+            angle = round(rng.uniform(0.0, 180.0), 2)
+            f.update(crack_mm=length, crack_angle_deg=angle)
+            truth = {"defect": "crack", "crack_mm": length}
         expected = Expected(checkpoint, False, "defective_part", "carrier")
 
-    return SceneSpec(
-        seed=seed,
-        fault=fault,
-        checkpoint=checkpoint,
-        part_kind=part_kind,
-        wrong_shape=wrong_shape,
-        chip_mm=chip_mm,
-        chip_corner=chip_corner,
-        part_location=part_location,
-        part_offset_m=part_offset,
-        part_yaw_deg=round(part_yaw, 3),
-        part_tilt_deg=round(part_tilt, 3),
-        gripper_at=gripper_at,
-        gripper_height_m=gripper_height,
-        gripper_closed=gripper_closed,
-        gripper_holding=gripper_holding,
-        expected=expected,
-        truth=truth,
-    )
+    f["part_yaw_deg"] = round(f["part_yaw_deg"], 3)
+    f["part_tilt_deg"] = round(f["part_tilt_deg"], 3)
+    return SceneSpec(seed=seed, fault=fault, checkpoint=checkpoint, expected=expected,
+                     truth=truth, **f)
