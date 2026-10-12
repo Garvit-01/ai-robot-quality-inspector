@@ -28,7 +28,7 @@
 # so a stuck job can't run up a bill. Delete the VM when finished.
 set -euo pipefail
 
-VM_IP="${VM_IP:-89.169.98.14}"            # the VM's public IP
+VM_IP="${VM_IP:-89.169.114.255}"            # the VM's public IP
 VM_USER="${VM_USER:-ubuntu}"
 VM_DIR="${VM_DIR:-selfheal}"              # working directory on the VM (under ~)
 SHUTDOWN_MIN="${SHUTDOWN_MIN:-240}"       # safety cap: VM powers off after this many minutes
