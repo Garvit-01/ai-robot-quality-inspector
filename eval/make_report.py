@@ -32,7 +32,7 @@ from PIL import Image  # noqa: E402
 # Categorical slots 1-4 of the dataviz skill's validated reference palette (light mode),
 # assigned in fixed order. Every bar also carries its value as text, so identity and
 # magnitude never depend on colour alone.
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#6250d6"]
 INK, INK_2, GRID = "#1f1f1e", "#5f5e58", "#e4e3dd"
 FAULT_NAMES = {
     "F0": "F0 clean", "F1": "F1 displaced", "F2": "F2 dropped",
@@ -60,6 +60,60 @@ def label(s: dict) -> str:
     m = s["meta"]
     model = m["model"].split("/")[-1]
     return f"{Path(m['scene_dir']).name} · prompt {m.get('prompt_version', '?')} · {model} · {'+'.join(m['views'])}"
+
+
+OUTCOME_LABELS = [("correct", "correct"), ("quality_escape", "bad part shipped"),
+                  ("operator_call", "operator called"), ("silent_fail", "silent failure"),
+                  ("false_alarm", "false alarm"), ("wrong_recovery", "wrong recovery")]
+COND_NAMES = {"A": "A  no checks", "B": "B  industrial baseline\n    (gripper sensor only)",
+              "C": "C  verifier + fusion\n    + Nemotron planner", "D": "D  verifier + fusion\n    + lookup table"}
+
+
+def page_decisions(pdf, run: Path):
+    """What each recovery policy does with the same 120 scenes."""
+    s = json.loads((run / "summary.json").read_text())
+    conds = ["A", "B", "C", "D"]
+    n = s["meta"]["n"]
+    fig, ax = plt.subplots(figsize=(11.69, 8.27))
+    fig.subplots_adjust(top=0.78, bottom=0.22, left=0.20, right=0.97)
+    for i, c in enumerate(reversed(conds)):
+        left = 0
+        for j, (key, _) in enumerate(OUTCOME_LABELS):
+            v = s["conditions"][c]["outcomes"][key]
+            if v:
+                ax.barh(i, v, left=left, color=SERIES[j], edgecolor="white", linewidth=2, height=0.62)
+                if v >= 4:
+                    ax.text(left + v / 2, i, str(v), ha="center", va="center", fontsize=9,
+                            color="white" if j in (0, 5) else INK)
+                left += v
+    ax.set_yticks(range(len(conds)), [COND_NAMES[c] for c in reversed(conds)], fontsize=10, color=INK)
+    ax.set_xlim(0, n)
+    ax.set_xlabel(f"scenes (of {n})", color=INK_2)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(GRID)
+    ax.tick_params(length=0, colors=INK_2)
+    handles = [plt.Rectangle((0, 0), 1, 1, color=SERIES[j]) for j in range(len(OUTCOME_LABELS))]
+    ax.legend(handles, [lab for _, lab in OUTCOME_LABELS], ncol=6, loc="upper left",
+              bbox_to_anchor=(0, 1.08), frameon=False, fontsize=9)
+    fig.text(0.05, 0.93, "What each recovery policy does with the same scenes", fontsize=16, color=INK, weight="bold")
+    p = s["planner"]
+    fig.text(0.05, 0.895, f"Held-out scenes, one decision per scene. Planner: {p['calls']} calls, "
+             f"{p['guardrail_overrides']} guardrail overrides, p50 {p['latency_ms_p50']} ms.", fontsize=9, color=INK_2)
+    cd = s["c_vs_d"]
+    notes = [
+        f"B lets every wrong, defective and misaligned part through by construction: a finger gap "
+        f"can't see identity, damage or seating ({s['conditions']['B']['outcomes']['quality_escape']} bad parts shipped).",
+        f"C and D see identical fused verdicts and disagree on {cd['disagreements']} scenes: the table is right on "
+        f"{cd['d_right']}, the LLM on {cd['c_right']}. With a five-tool menu, the LLM adds no accuracy over a table.",
+        "Per-checkpoint decisions only: recovery success and whole cycles need the closed loop (future work).",
+    ]
+    y = 0.14
+    for t in notes:
+        fig.text(0.05, y, "• " + t, fontsize=9, color=INK, wrap=True)
+        y -= 0.035
+    pdf.savefig(fig)
+    plt.close(fig)
 
 
 def page_summary(pdf, runs):
@@ -213,11 +267,14 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+", type=Path, help="benchmark run dirs; the LAST is the headline")
     ap.add_argument("--out", type=Path, default=Path("reports/evaluation_report.pdf"))
+    ap.add_argument("--decisions", type=Path, default=None, help="a bench_decisions.py run dir")
     args = ap.parse_args()
     runs = [load(r) for r in args.runs]
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(args.out) as pdf:
         page_summary(pdf, runs)
+        if args.decisions:
+            page_decisions(pdf, args.decisions)
         page_per_fault(pdf, runs)
         page_confusion(pdf, runs[-1])
         page_errors(pdf, runs[-1])
