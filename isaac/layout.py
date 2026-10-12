@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import math
 
+import partsets
+
 TABLE_SIZE = (1.20, 0.90, 0.04)
 TABLE_CENTER = (0.40, 0.0)
 FLOOR_Z = -0.75
@@ -57,7 +59,8 @@ GRIPPER_GAP_OPEN = 0.090
 GRIPPER_GAP_EMPTY = 0.008
 FINGER = (0.020, 0.012, 0.055)  # x, y (thickness), z
 
-# Bounding box (x, y, z) of each part variant, keyed by (part_kind, wrong_shape).
+# Bounding box (x, y, z) of each CUBE-set part variant, keyed by (part_kind, wrong_shape).
+# Kept for the cube set's callers; part_def() is the general lookup.
 PART_DIMS = {
     ("correct", None): (PART_EDGE, PART_EDGE, PART_EDGE),
     ("defective", None): (PART_EDGE, PART_EDGE, PART_EDGE),
@@ -71,6 +74,19 @@ Mat3 = tuple[tuple[float, float, float], tuple[float, float, float], tuple[float
 
 def part_key(spec) -> tuple[str, str | None]:
     return (spec.part_kind, spec.wrong_shape if spec.part_kind == "wrong" else None)
+
+
+def part_set(spec) -> "partsets.PartSet":
+    return partsets.get(getattr(spec, "part_set", "cube"))
+
+
+def part_def(spec) -> "partsets.PartDef":
+    """The PartDef for the part a scene shows (defective parts are the correct part,
+    damaged)."""
+    ps = part_set(spec)
+    if spec.part_kind == "wrong":
+        return next(p for p in ps.wrong if p.name == spec.wrong_shape)
+    return ps.correct
 
 
 # --- rotation helpers -------------------------------------------------------------------
@@ -99,7 +115,7 @@ def apply(R: Mat3, p) -> tuple[float, float, float]:
     return tuple(R[i][0] * p[0] + R[i][1] * p[1] + R[i][2] * p[2] for i in range(3))  # type: ignore[return-value]
 
 
-def surface_samples(dims, n: int = 33) -> list[tuple[float, float, float]]:
+def surface_samples(dims, n: int = 33, shape: str = "box") -> list[tuple[float, float, float]]:
     """Points on all six faces of a centred box, n x n per face.
 
     Density matters: the pocket wall's inner edge can fall between samples, and the part
@@ -108,6 +124,8 @@ def surface_samples(dims, n: int = 33) -> list[tuple[float, float, float]]:
     the worst case is about 0.4 mm, for ~6.5k points and a few ms per scene."""
     hx, hy, hz = (d / 2 for d in dims)
     lin = [-1 + 2 * i / (n - 1) for i in range(n)]
+    if shape in ("hex", "cylinder"):
+        return _prism_samples(hx, hy, hz, n, shape)
     pts = []
     for a in lin:
         for b in lin:
@@ -117,26 +135,56 @@ def surface_samples(dims, n: int = 33) -> list[tuple[float, float, float]]:
     return pts
 
 
+def _prism_samples(hx, hy, hz, n, shape):
+    """Surface points of a hex prism (corners on the y axis, flats facing +-x: how the
+    nut sits) or a cylinder, filling the given half-extents. Walls, rims and caps."""
+    pts = []
+    ring = max(24, 4 * n)
+    if shape == "hex":
+        r = hy  # corner radius
+        corners = [(r * math.cos(math.radians(90 + 60 * i)), r * math.sin(math.radians(90 + 60 * i))) for i in range(6)]
+        outline = []
+        per = max(2, ring // 6)
+        for i in range(6):
+            (x0, y0), (x1, y1) = corners[i], corners[(i + 1) % 6]
+            outline += [(x0 + (x1 - x0) * k / per, y0 + (y1 - y0) * k / per) for k in range(per)]
+    else:
+        outline = [(hx * math.cos(2 * math.pi * k / ring), hy * math.sin(2 * math.pi * k / ring)) for k in range(ring)]
+    zs = [-hz + 2 * hz * k / (n - 1) for k in range(n)]
+    for (x, y) in outline:
+        for z in zs:
+            pts.append((x, y, z))
+    for f in [k / (n - 1) for k in range(n)]:  # caps: concentric scaled outlines
+        for (x, y) in outline:
+            pts += [(x * f, y * f, hz), (x * f, y * f, -hz)]
+    return pts
+
+
 # --- the fixture as a height field ------------------------------------------------------
-def fixture_support_z(x: float, y: float) -> float:
+def fixture_support_z(x: float, y: float, ps: "partsets.PartSet" = partsets.CUBE) -> float:
     """Height of the top of solid material under (x, y) near the fixture: the pocket
-    floor inside the pocket, the wall top over the walls, the table outside."""
+    floor inside the pocket, the wall top over the walls, the table outside. The pocket is
+    square (cube set) or a round counterbore (fastener set)."""
     dx, dy = abs(x - FIXTURE_CENTER[0]), abs(y - FIXTURE_CENTER[1])
-    if dx <= FIXTURE_POCKET / 2 and dy <= FIXTURE_POCKET / 2:
-        return FIXTURE_BASE_TOP
-    if dx <= FIXTURE_OUTER / 2 and dy <= FIXTURE_OUTER / 2:
-        return FIXTURE_WALL_TOP
+    if ps.pocket_shape == "round":
+        in_pocket = math.hypot(dx, dy) <= ps.pocket_size / 2
+    else:
+        in_pocket = dx <= ps.pocket_size / 2 and dy <= ps.pocket_size / 2
+    if in_pocket:
+        return ps.fixture_base_top
+    if dx <= ps.fixture_outer / 2 and dy <= ps.fixture_outer / 2:
+        return ps.fixture_wall_top
     return 0.0
 
 
-def rest_on_fixture(R: Mat3, xy, dims) -> float:
+def rest_on_fixture(R: Mat3, xy, dims, shape: str = "box", ps: "partsets.PartSet" = partsets.CUBE) -> float:
     """Centre height at which a part with orientation R, centred above `xy`, rests on
     the fixture without any point inside solid material: raise it until the most
     constraining surface point just touches."""
     z = -math.inf
-    for p in surface_samples(dims):
+    for p in surface_samples(dims, shape=shape):
         q = apply(R, p)
-        z = max(z, fixture_support_z(xy[0] + q[0], xy[1] + q[1]) - q[2])
+        z = max(z, fixture_support_z(xy[0] + q[0], xy[1] + q[1], ps) - q[2])
     return z
 
 
@@ -144,8 +192,9 @@ def rest_on_fixture(R: Mat3, xy, dims) -> float:
 def part_pose(spec) -> tuple[tuple[float, float, float], Mat3]:
     """World position and rotation matrix of the part for a SceneSpec.
     The part held by the gripper is handled by the caller (it hangs at the grasp point)."""
-    key = part_key(spec)
-    dims = PART_DIMS[key]
+    ps = part_set(spec)
+    pd = part_def(spec)
+    dims = pd.dims
     half_h = dims[2] / 2
     ox, oy = spec.part_offset_m
     yaw = spec.part_yaw_deg
@@ -165,7 +214,7 @@ def part_pose(spec) -> tuple[tuple[float, float, float], Mat3]:
             theta = math.atan2(oy, ox)
             axis = (-math.sin(theta), math.cos(theta), 0.0)
             R = _matmul(rot_axis(axis, -tilt), R)
-        return (xy[0], xy[1], rest_on_fixture(R, xy, dims)), R
+        return (xy[0], xy[1], rest_on_fixture(R, xy, dims, pd.shape, ps)), R
 
     if loc == "table":
         fx, fy = spec.landing_frac

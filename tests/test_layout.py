@@ -15,23 +15,26 @@ import faults  # noqa: E402
 import layout as L  # noqa: E402
 
 SEEDS = range(1000, 2200)
-FIXTURE_SCENES = [s for s in SEEDS if faults.make_scene(s).part_location == "fixture"]
+PART_SETS = ("cube", "fastener")
+FIXTURE_SCENES = [(ps, s) for ps in PART_SETS for s in SEEDS
+                  if faults.make_scene(s, ps).part_location == "fixture"]
 
 
 def _gaps(spec, n):
     """Height above solid material of every surface sample, on an n x n grid per face."""
     xyz, R = L.part_pose(spec)
-    dims = L.PART_DIMS[L.part_key(spec)]
+    pd = L.part_def(spec)
+    ps = L.part_set(spec)
     out = []
-    for q in (L.apply(R, p) for p in L.surface_samples(dims, n)):
+    for q in (L.apply(R, p) for p in L.surface_samples(pd.dims, n, pd.shape)):
         x, y, z = (xyz[i] + q[i] for i in range(3))
-        out.append(z - L.fixture_support_z(x, y))
+        out.append(z - L.fixture_support_z(x, y, ps))
     return out
 
 
-@pytest.mark.parametrize("seed", FIXTURE_SCENES)
-def test_fixture_parts_never_penetrate_and_always_touch(seed):
-    spec = faults.make_scene(seed)
+@pytest.mark.parametrize("ps,seed", FIXTURE_SCENES)
+def test_fixture_parts_never_penetrate_and_always_touch(ps, seed):
+    spec = faults.make_scene(seed, ps)
     # Penetration is checked on grids the solver does NOT use (13 and 41 per face), so a
     # wall edge falling between the solver's own samples is caught. Tolerance 0.5 mm.
     for n in (13, 41):
@@ -43,31 +46,35 @@ def test_fixture_parts_never_penetrate_and_always_touch(seed):
 
 
 def test_clean_seated_parts_rest_on_the_pocket_floor():
-    for s in FIXTURE_SCENES:
-        spec = faults.make_scene(s)
+    for ps, s in FIXTURE_SCENES:
+        spec = faults.make_scene(s, ps)
         if spec.fault == "F0":
             z = L.part_pose(spec)[0][2]
-            assert z == pytest.approx(L.FIXTURE_BASE_TOP + L.PART_EDGE / 2, abs=1e-9), s
+            want = L.part_set(spec).fixture_base_top + L.part_def(spec).dims[2] / 2
+            assert z == pytest.approx(want, abs=1e-9), (ps, s)
 
 
 def test_misaligned_parts_are_raised_on_the_side_they_are_offset_toward():
-    for s in FIXTURE_SCENES:
-        spec = faults.make_scene(s)
+    for ps, s in FIXTURE_SCENES:
+        spec = faults.make_scene(s, ps)
         if spec.fault != "F3":
             continue
         xyz, R = L.part_pose(spec)
-        seated = L.FIXTURE_BASE_TOP + L.PART_EDGE / 2
-        assert xyz[2] > seated + 0.003, f"{s}: only {(xyz[2] - seated) * 1000:.1f} mm proud"
+        dims = L.part_def(spec).dims
+        seated = L.part_set(spec).fixture_base_top + dims[2] / 2
+        # Proud by at least ~6% of the part's height: 3 mm for the cube, ~1 mm for a nut.
+        assert xyz[2] > seated + 0.06 * dims[2], f"{ps} {s}: only {(xyz[2] - seated) * 1000:.1f} mm proud"
         ox, oy = spec.part_offset_m
         n = math.hypot(ox, oy)
-        d = (ox / n * 0.025, oy / n * 0.025, 0.0)
+        d = (ox / n * dims[0] / 2, oy / n * dims[0] / 2, 0.0)
         high, low = L.apply(R, d), L.apply(R, (-d[0], -d[1], 0.0))
         assert high[2] > low[2], f"{s}: raised side faces away from the offset"
 
 
-def test_carrier_parts_sit_on_the_carrier():
+@pytest.mark.parametrize("ps", PART_SETS)
+def test_carrier_parts_sit_on_the_carrier(ps):
     for s in SEEDS:
-        spec = faults.make_scene(s)
+        spec = faults.make_scene(s, ps)
         if spec.part_location != "carrier":
             continue
         x, y, _ = L.part_pose(spec)[0]

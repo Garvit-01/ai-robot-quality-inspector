@@ -124,7 +124,7 @@ def test_seated_clean_parts_have_tight_jitter():
     for s in SEEDS:
         sc = faults.make_scene(s)
         if sc.fault == "F0" and sc.checkpoint == "CP_POST_PLACE":
-            assert 1000.0 * math.hypot(*sc.part_offset_m) <= faults.SEATED_JITTER_MM + 1e-6
+            assert 1000.0 * math.hypot(*sc.part_offset_m) <= faults.SEATED_JITTER_MM + 1e-6  # cube set
             assert abs(sc.part_yaw_deg) <= faults.SEATED_YAW_JITTER_DEG
 
 

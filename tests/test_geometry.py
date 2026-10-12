@@ -101,3 +101,51 @@ def test_crack_faces_up_and_is_hairline_wide():
     widths = [((pts[2 * k][0] - pts[2 * k + 1][0]) ** 2 + (pts[2 * k][1] - pts[2 * k + 1][1]) ** 2) ** 0.5
               for k in range(len(pts) // 2)]
     assert max(widths) <= 0.0009 + 1e-12 and min(widths) > 0
+
+
+# --- fastener defects ------------------------------------------------------------------
+from geometry import hex_corner_cut, hex_corner_xy, hex_flat_frame  # noqa: E402
+
+AC, H = 0.0277, 0.013  # M16 nut: across corners, height
+
+
+def _hex_cloud(n=40):
+    """Points on a hex prism shell, corners on the y axis — like the nut mesh."""
+    pts = []
+    for i in range(6):
+        (x0, y0), (x1, y1) = hex_corner_xy(i, AC), hex_corner_xy((i + 1) % 6, AC)
+        for k in range(n):
+            t = k / n
+            for z in (0.0, H / 2, H):
+                pts.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, z))
+    return pts
+
+
+@pytest.mark.parametrize("corner", [3, 4])
+def test_hex_chip_removes_only_the_chosen_corner(corner):
+    pts = _hex_cloud()
+    out, moved = hex_corner_cut(pts, corner, AC, H, 0.004)
+    assert moved > 0
+    cx, cy = hex_corner_xy(corner, AC)
+    for (a, b) in zip(pts, out):
+        if a != b:
+            # Only points near the chosen corner's top move, and they move inward/down.
+            # A 4 mm chip: nothing further than 4 mm (plus sampling slack) from the corner.
+            assert ((a[0] - cx) ** 2 + (a[1] - cy) ** 2) ** 0.5 < 0.0045 and a[2] > H - 0.0045
+            assert b[2] <= a[2] + 1e-12
+    # Nothing is left beyond the cutting plane.
+    _, moved_again = hex_corner_cut(out, corner, AC, H, 0.004)
+    assert moved_again == 0
+
+
+def test_chip_corners_face_the_inspection_camera():
+    # The close-up camera sits at +x, -y; corners 3 (-y) and 4 (+x,-y) face it.
+    for c in (3, 4):
+        x, y = hex_corner_xy(c, AC)
+        assert 0.34 * x - 0.12 * y > 0
+
+
+def test_flat_frame_sits_on_the_flat_and_faces_out():
+    centre, u, v, n = hex_flat_frame(300.0, 0.024, 0.0065)
+    assert abs((centre[0] ** 2 + centre[1] ** 2) ** 0.5 - 0.012) < 0.0005
+    assert abs(sum(u[i] * n[i] for i in range(3))) < 1e-12 and v == (0.0, 0.0, 1.0)

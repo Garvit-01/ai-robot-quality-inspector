@@ -24,11 +24,16 @@ import math
 import random
 from dataclasses import asdict, dataclass, field
 
+import partsets
+
 CHECKPOINTS = ("CP_PRE_GRASP", "CP_POST_LIFT", "CP_POST_TRANSPORT", "CP_POST_PLACE")
 FAULT_CLASSES = ("F0", "F1", "F2", "F3", "F4", "F5")
 WRONG_SHAPES = ("cylinder", "small_cube", "tall_block")
 DEFECT_TYPES = ("chip", "crack")
 
+# Per part set: wrong parts and defects come from partsets.py, rotated in its order.
+# For cubes these are exactly WRONG_SHAPES and DEFECT_TYPES above.
+#
 # Chips go only on the two top corners that face the close-up inspection camera
 # (it sits at +x, -y of the part). On the other two the chip facet is edge-on or faces
 # away, so a single camera physically cannot see it; that would measure camera placement,
@@ -53,6 +58,13 @@ F3_OFFSET_MM = (6.0, 15.0)
 F3_TILT_DEG = (5.0, 15.0)
 F5_CHIP_MM = (12.0, 20.0)
 F5_CRACK_MM = (22.0, 40.0)
+# On a fastener the defects are smaller, because the part is: a chip is cut 3-5 mm into a
+# hex corner, a crack runs 6-11 mm across a 13 mm flat.
+FASTENER_CHIP_MM = (3.0, 5.0)
+FASTENER_CRACK_MM = (6.0, 11.0)
+# Hex corners of the nut's top face that face the close-up camera (it sits at +x, -y).
+# Numbered counter-clockwise from +y in geometry.hex_corner_cut.
+FASTENER_CHIP_CORNERS = (3, 4)
 F2_TABLE_PER_10 = 7  # 7 of every 10 drops land on the table (recoverable), 3 off it
 
 # Small, deliberate nuisance variation on clean scenes. A real carrier never presents a
@@ -107,9 +119,15 @@ class SceneSpec:
 
     expected: Expected
     truth: dict = field(default_factory=dict)
+    part_set: str = "cube"
 
     def to_json(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        # Cube scenes serialise exactly as they did before part sets existed, so the
+        # pinned eval-split fingerprint (and every cube result) stays valid.
+        if d["part_set"] == "cube":
+            del d["part_set"]
+        return d
 
 
 def fault_for_seed(seed: int) -> str:
@@ -123,8 +141,12 @@ def _offset_xy(rng: random.Random, magnitude_mm: float) -> tuple[float, float]:
     return (round(r * math.cos(theta), 6), round(r * math.sin(theta), 6))
 
 
-def make_scene(seed: int) -> SceneSpec:
-    """Derive the complete scene for `seed`. Deterministic and side-effect free."""
+def make_scene(seed: int, part_set: str = "cube") -> SceneSpec:
+    """Derive the complete scene for `seed`. Deterministic and side-effect free.
+
+    The part set changes WHAT the parts are (and the size of their defects), never which
+    fault or sub-case a seed gets: seed 5003 is F5 in both sets."""
+    ps = partsets.get(part_set)
     rng = random.Random(seed)
     fault = fault_for_seed(seed)
     k = seed // len(FAULT_CLASSES)  # sub-case selector, balanced within each fault
@@ -153,7 +175,7 @@ def make_scene(seed: int) -> SceneSpec:
                      gripper_height_m=0.12, gripper_closed=True, gripper_holding=True)
         elif checkpoint == "CP_POST_PLACE":
             f.update(part_location="fixture", gripper_at="above_fixture",
-                     part_offset_m=_offset_xy(rng, rng.uniform(0.0, SEATED_JITTER_MM)),
+                     part_offset_m=_offset_xy(rng, rng.uniform(0.0, ps.seated_jitter_mm)),
                      part_yaw_deg=rng.uniform(-SEATED_YAW_JITTER_DEG, SEATED_YAW_JITTER_DEG))
         expected = Expected(checkpoint, True, "none", NOMINAL_LOCATION[checkpoint])
 
@@ -204,28 +226,32 @@ def make_scene(seed: int) -> SceneSpec:
 
     elif fault == "F4":
         checkpoint = "CP_PRE_GRASP"
-        shape = WRONG_SHAPES[k % len(WRONG_SHAPES)]
+        shape = ps.wrong[k % len(ps.wrong)].name
         f.update(part_kind="wrong", wrong_shape=shape)
         truth = {"wrong_shape": shape}
         expected = Expected(checkpoint, False, "wrong_part", "carrier")
 
     else:  # F5
         checkpoint = "CP_PRE_GRASP"
-        defect = DEFECT_TYPES[k % len(DEFECT_TYPES)]
+        defect = ps.defects[k % len(ps.defects)]
         f.update(part_kind="defective", defect_type=defect)
+        cube = ps.name == "cube"
         if defect == "chip":
-            corner = CHIP_CORNERS[(k // 2) % len(CHIP_CORNERS)]
-            chip = round(rng.uniform(*F5_CHIP_MM), 2)
+            corners = CHIP_CORNERS if cube else FASTENER_CHIP_CORNERS
+            corner = corners[(k // len(ps.defects)) % len(corners)]
+            chip = round(rng.uniform(*(F5_CHIP_MM if cube else FASTENER_CHIP_MM)), 2)
             f.update(chip_mm=chip, chip_corner=corner)
             truth = {"defect": "chip", "chip_mm": chip, "chip_corner": corner}
-        else:
-            length = round(rng.uniform(*F5_CRACK_MM), 2)
+        elif defect == "crack":
+            length = round(rng.uniform(*(F5_CRACK_MM if cube else FASTENER_CRACK_MM)), 2)
             angle = round(rng.uniform(0.0, 180.0), 2)
             f.update(crack_mm=length, crack_angle_deg=angle)
             truth = {"defect": "crack", "crack_mm": length}
+        else:  # rust: the whole part's finish, no geometry change
+            truth = {"defect": "rust"}
         expected = Expected(checkpoint, False, "defective_part", "carrier")
 
     f["part_yaw_deg"] = round(f["part_yaw_deg"], 3)
     f["part_tilt_deg"] = round(f["part_tilt_deg"], 3)
     return SceneSpec(seed=seed, fault=fault, checkpoint=checkpoint, expected=expected,
-                     truth=truth, **f)
+                     truth=truth, part_set=ps.name, **f)
