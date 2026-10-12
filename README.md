@@ -95,50 +95,38 @@ swap a config change. Always re-pin IDs from the live catalogue before a run:
 
 ## Setup
 
-Requires ROS2 Jazzy, MoveIt2, and Isaac Sim 5.1.0 for the cell itself; the model-facing
-pieces need only Python.
+What each part needs:
+
+| Part | Needs |
+|---|---|
+| Calling the models, scoring, reports, tests | Python 3.10+ and a Nebius Token Factory key. Any computer. |
+| Rendering scenes (`isaac/`) | Isaac Sim 5.1 and an NVIDIA RTX GPU (we used a T4) |
+| Fine-tuning (`finetune/`) | a GPU VM; we used one H100 80 GB on Nebius AI Cloud |
 
 ```bash
-git clone git@github.com:Garvit-01/selfheal-workcell.git
-cd selfheal-workcell
+git clone git@github.com:Garvit-01/nvidia_nebius_challenge_ws.git
+cd nvidia_nebius_challenge_ws
 
 python3 -m venv .venv
-.venv/bin/pip install openai pydantic pyyaml pillow
+.venv/bin/pip install -r requirements.txt
 
 cp .env.example .env
-$EDITOR .env          # add your Nebius Token Factory key (starts with "v1.")
-```
-
-Build the ROS2 packages by symlinking them into your workspace — this repo is never built
-in place:
-
-```bash
-ln -s "$PWD/src/selfheal_cell" ~/ros2_ws/src/
-ln -s "$PWD/src/selfheal_interfaces" ~/ros2_ws/src/
-cd ~/ros2_ws && colcon build --packages-select selfheal_cell selfheal_interfaces
+$EDITOR .env          # add your Nebius Token Factory key and the model IDs
 ```
 
 ## Run
 
-Smoke-test the two model paths first. Neither needs Isaac Sim:
+`make help` lists everything, with time and cost. The main entry points:
 
 ```bash
-# planner: asserts exactly one whitelisted, well-formed tool call
-.venv/bin/python scripts/smoke_nemotron.py
-
-# ...and that the code guardrail overrides a bad choice
-.venv/bin/python scripts/smoke_nemotron.py --failure-type wrong_part
-
-# verifier: asserts a schema-valid verdict on a synthetic frame
-.venv/bin/python scripts/smoke_verifier.py --selftest
+make test        # all unit tests, no key or GPU needed
+make smoke       # one live call each to the planner (Nemotron) and the verifier
+make demo        # render one scene of each fault type (Isaac Sim)
+make view SEED=1031   # open one scene in Isaac Sim with a window
+make eval        # render 120 held-out scenes, score the verifier, compare policies A-D, PDF
 ```
 
-Full trial runs and metrics (harness in progress):
-
-```bash
-.venv/bin/python -m selfheal_cell.trial_runner --condition C --trials 25
-.venv/bin/python eval/compute_metrics.py runs/<run_id>
-```
+The fine-tune is driven end to end by `finetune/run_finetune.sh`; see `finetune/README.md`.
 
 ## Experimental conditions
 
