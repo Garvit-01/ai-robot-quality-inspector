@@ -19,6 +19,9 @@
 #   eval      score the fine-tuned model on the same held-out scenes — only for the final pick
 #   pull      bring the adapter and the raw replies back here
 #   score     parse + score both runs exactly like every other benchmark, A/B/C/D, PDF
+#   nemotron  (optional) NVIDIA Nemotron-Nano-12B-v2-VL zero-shot on the held-out scenes, scored
+#             the same way. Own environment on the VM (setup_nemotron_vl.sh), ~25 GB download,
+#             ~30 s per scene on one H100
 #
 # What you need first:
 #   - rendered scenes:  runs/scenes/ftrain_v1 (training), fdev_v2 (validation), feval_v1 (held out)
@@ -45,6 +48,25 @@ SSH="ssh -o BatchMode=yes -o ConnectTimeout=20 $VM_USER@$VM_IP"
 RSYNC="rsync -a -e 'ssh -o BatchMode=yes'"
 vm() { $SSH "cd ~/$VM_DIR && $*" < /dev/null; }   # run a command on the VM, in the work dir
 say() { echo; echo "=== $(date -u +%H:%M:%S) $* ==="; }
+
+# Long GPU jobs run detached on the VM (nohup), so a dropped SSH connection can't kill them;
+# this machine polls the log until the job's process is gone, showing progress lines.
+# Usage: vm_job <log file> <command>. Returns non-zero if there is no log or it shows a
+# Python traceback. The command is passed as plain words: no quoted arguments.
+vm_job() {
+  local log="$1"; shift
+  vm "nohup $* > $log 2>&1 &"
+  sleep 15   # let the process start before the first check
+  local last=""
+  # [p]ython: the bracket stops pgrep matching this polling command's own shell.
+  while vm "pgrep -f '[p]ython.* $(echo "$*" | awk '{print $2}')' > /dev/null"; do
+    sleep 60
+    local now; now=$(vm "grep -E '^\[(train|gen)\]' $log | tail -1" || true)
+    [ "$now" != "$last" ] && echo "  $now" && last="$now"
+  done
+  vm "grep -E '^\[(train|gen)\]' $log | tail -2"
+  vm "test -s $log && ! grep -q Traceback $log"   # the job ran and didn't crash
+}
 
 # -----------------------------------------------------------------------------------------
 # 1. DATA — one JSON line per scene: the exact prompt the verifier sees, the two image
@@ -103,8 +125,8 @@ step_baseline() {
 # -----------------------------------------------------------------------------------------
 step_train() {
   say "train: LoRA, $EPOCHS epochs over $(wc -l < "$DATA/train.jsonl") examples"
-  vm ".venv/bin/python train_lora.py --data train.jsonl --val dev.jsonl --images scenes \
-        --out adapter --epochs $EPOCHS 2>&1 | grep --line-buffered -E '^\[train\]|trainable' | tee train.log"
+  vm_job train.log .venv/bin/python train_lora.py --data train.jsonl --val dev.jsonl --images scenes \
+        --out adapter --epochs "$EPOCHS"
 }
 
 # -----------------------------------------------------------------------------------------
@@ -114,7 +136,7 @@ step_train() {
 # -----------------------------------------------------------------------------------------
 step_dev() {
   say "dev: fine-tuned model on the dev scenes (for choosing between runs)"
-  vm ".venv/bin/python generate.py --data dev.jsonl --images scenes --adapter adapter --out gen_tuned_dev.jsonl"
+  vm_job gen_tuned_dev.log .venv/bin/python generate.py --data dev.jsonl --images scenes --adapter adapter --out gen_tuned_dev.jsonl
   eval $RSYNC "$VM_USER@$VM_IP:~/$VM_DIR/gen_tuned_dev.jsonl" "$DATA/gen/"
   $PY finetune/score_generations.py "$DATA/dev.jsonl" "$DATA/gen/gen_tuned_dev.jsonl" \
       --scene-dir "$VAL" --model "Cosmos-Reason1-7B + LoRA (dev)" --out runs/bench/fdev_v2__cosmos_tuned
@@ -125,7 +147,7 @@ step_dev() {
 # -----------------------------------------------------------------------------------------
 step_eval() {
   say "eval: fine-tuned model on the held-out scenes"
-  vm ".venv/bin/python generate.py --data eval.jsonl --images scenes --adapter adapter --out gen_tuned.jsonl"
+  vm_job gen_tuned.log .venv/bin/python generate.py --data eval.jsonl --images scenes --adapter adapter --out gen_tuned.jsonl
 }
 
 # -----------------------------------------------------------------------------------------
@@ -156,8 +178,24 @@ step_score() {
       --out reports/evaluation_report_finetune.pdf
 }
 
+# -----------------------------------------------------------------------------------------
+# 9. NEMOTRON (optional) — NVIDIA's vision Nemotron, zero-shot, on the same held-out scenes.
+#    Token Factory's per-token Nemotrons are text-only, so it runs on this VM. Needs `push`.
+# -----------------------------------------------------------------------------------------
+step_nemotron() {
+  say "nemotron: Nemotron-Nano-12B-v2-VL zero-shot on the held-out scenes"
+  eval $RSYNC finetune/setup_nemotron_vl.sh finetune/generate_nemotron_vl.py "$VM_USER@$VM_IP:~/$VM_DIR/"
+  vm "bash setup_nemotron_vl.sh"
+  vm_job gen_nemotron_vl.log ~/nvl/.venv/bin/python generate_nemotron_vl.py --data eval.jsonl --images scenes \
+      --out gen_nemotron_vl.jsonl
+  mkdir -p "$DATA/gen"
+  eval $RSYNC "$VM_USER@$VM_IP:~/$VM_DIR/gen_nemotron_vl.jsonl" "$DATA/gen/"
+  $PY finetune/score_generations.py "$DATA/eval.jsonl" "$DATA/gen/gen_nemotron_vl.jsonl" \
+      --scene-dir "$EVAL" --model "nvidia/Nemotron-Nano-12B-v2-VL (zero-shot)" --out runs/bench/feval_v1__nemotron_vl
+}
+
 case "${1:-}" in
   all) step_data; step_push; step_setup; step_baseline; step_train; mkdir -p "$DATA/gen"; step_dev; step_eval; step_pull; step_score ;;
-  data|push|setup|baseline|train|dev|eval|pull|score) "step_$1" ;;
-  *) sed -n '2,30p' "$0"; exit 1 ;;
+  data|push|setup|baseline|train|dev|eval|pull|score|nemotron) "step_$1" ;;
+  *) sed -n '2,31p' "$0"; exit 1 ;;
 esac
