@@ -36,3 +36,9 @@ finetune/checkpoints/
 .vscode/
 .idea/
 .DS_Store
+
+# private project journal (one file per session + running decision/failure/result logs)
+journal/
+
+# generated reports (rebuild with eval/make_report.py)
+reports/
