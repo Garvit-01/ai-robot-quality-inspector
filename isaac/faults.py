@@ -58,13 +58,7 @@ F3_OFFSET_MM = (6.0, 15.0)
 F3_TILT_DEG = (5.0, 15.0)
 F5_CHIP_MM = (12.0, 20.0)
 F5_CRACK_MM = (22.0, 40.0)
-# On a fastener the defects are smaller, because the part is: a chip is cut 3-5 mm into a
-# hex corner, a crack runs 6-11 mm across a 13 mm flat.
-FASTENER_CHIP_MM = (3.0, 5.0)
-FASTENER_CRACK_MM = (6.0, 11.0)
-# Hex corners of the nut's top face that face the close-up camera (it sits at +x, -y).
-# Numbered counter-clockwise from +y in geometry.hex_corner_cut.
-FASTENER_CHIP_CORNERS = (3, 4)
+# Fastener ranges (smaller part, smaller defects) live in partsets.FASTENER.
 F2_TABLE_PER_10 = 7  # 7 of every 10 drops land on the table (recoverable), 3 off it
 
 # Small, deliberate nuisance variation on clean scenes. A real carrier never presents a
@@ -183,7 +177,7 @@ def make_scene(seed: int, part_set: str = "cube") -> SceneSpec:
         # Part shifted on the carrier before the grasp. Alternates between catching it
         # before the grasp (visible displacement) and its consequence one step later: the
         # gripper closed on air and lifted, part still on the carrier.
-        offset_mm = rng.uniform(*F1_OFFSET_MM)
+        offset_mm = rng.uniform(*ps.f1_offset_mm)
         yaw = rng.uniform(*F1_YAW_DEG) * rng.choice((-1.0, 1.0))
         f.update(part_offset_m=_offset_xy(rng, offset_mm), part_yaw_deg=yaw)
         truth = {"offset_mm": round(offset_mm, 2), "yaw_deg": round(yaw, 2)}
@@ -235,20 +229,19 @@ def make_scene(seed: int, part_set: str = "cube") -> SceneSpec:
         checkpoint = "CP_PRE_GRASP"
         defect = ps.defects[k % len(ps.defects)]
         f.update(part_kind="defective", defect_type=defect)
-        cube = ps.name == "cube"
         if defect == "chip":
-            corners = CHIP_CORNERS if cube else FASTENER_CHIP_CORNERS
+            corners = ps.chip_corners
             corner = corners[(k // len(ps.defects)) % len(corners)]
-            chip = round(rng.uniform(*(F5_CHIP_MM if cube else FASTENER_CHIP_MM)), 2)
+            chip = round(rng.uniform(*ps.chip_mm), 2)
             f.update(chip_mm=chip, chip_corner=corner)
             truth = {"defect": "chip", "chip_mm": chip, "chip_corner": corner}
         elif defect == "crack":
-            length = round(rng.uniform(*(F5_CRACK_MM if cube else FASTENER_CRACK_MM)), 2)
+            length = round(rng.uniform(*ps.crack_mm), 2)
             angle = round(rng.uniform(0.0, 180.0), 2)
             f.update(crack_mm=length, crack_angle_deg=angle)
             truth = {"defect": "crack", "crack_mm": length}
-        else:  # rust: the whole part's finish, no geometry change
-            truth = {"defect": "rust"}
+        else:  # rust: patches painted on the surface, no geometry change
+            truth = {"defect": "rust", "rust_coverage": round(rng.uniform(0.25, 0.5), 3)}
         expected = Expected(checkpoint, False, "defective_part", "carrier")
 
     f["part_yaw_deg"] = round(f["part_yaw_deg"], 3)

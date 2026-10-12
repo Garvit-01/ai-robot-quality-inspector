@@ -29,7 +29,7 @@ from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade, Vt
 import partsets  # noqa: E402
 from geometry import (  # noqa: E402
     block_with_round_hole, chipped_cube_mesh, crack_ribbon, hex_corner_cut, hex_flat_frame,
-    place_on_face,
+    place_on_face, rust_pattern,
 )
 
 # All dimensions and placement maths live in layout.py (pure Python, unit-tested).
@@ -41,11 +41,7 @@ from layout import (  # noqa: E402
 )
 
 METALS = f"{partsets.ASSET_ROOT}/NVIDIA/Materials/Base/Metals"
-# Workshop-style HDR environments from the same asset server. Metal parts only look like
-# metal with real surroundings to reflect; a plain grey sky made steel look flat and dark.
-WORKSHOP_HDRS = tuple(f"{partsets.ASSET_ROOT}/NVIDIA/Assets/Skies/Indoor/{n}" for n in (
-    "autoshop_01_4k.hdr", "ZetoCG_com_WarehouseInterior2b.hdr", "old_bus_depot_4k.hdr",
-    "carpentry_shop_01_4k.hdr"))
+WORKSHOP_HDRS = partsets.WORKSHOP_HDRS
 
 
 # ---------------------------------------------------------------------------------------
@@ -126,6 +122,26 @@ def _mdl_material(stage: Usd.Stage, path: str, mdl_name: str) -> UsdShade.Materi
     return UsdShade.Material(stage.GetPrimAtPath(path))
 
 
+def _vertex_painted_material(stage: Usd.Stage, path: str) -> UsdShade.Material:
+    """A surface whose colour, metalness and roughness come from per-vertex primvars
+    (rustColor, rustMetal, rustRough): how procedural rust is painted onto meshes that
+    have no texture coordinates."""
+    mat = UsdShade.Material.Define(stage, path)
+    surf = UsdShade.Shader.Define(stage, f"{path}/Shader")
+    surf.CreateIdAttr("UsdPreviewSurface")
+    for name, typ, out_t, inp in (("rustColor", "UsdPrimvarReader_float3", Sdf.ValueTypeNames.Float3, "diffuseColor"),
+                                  ("rustMetal", "UsdPrimvarReader_float", Sdf.ValueTypeNames.Float, "metallic"),
+                                  ("rustRough", "UsdPrimvarReader_float", Sdf.ValueTypeNames.Float, "roughness")):
+        r = UsdShade.Shader.Define(stage, f"{path}/{name}")
+        r.CreateIdAttr(typ)
+        r.CreateInput("varname", Sdf.ValueTypeNames.Token).Set(name)
+        r.CreateOutput("result", out_t)
+        in_t = Sdf.ValueTypeNames.Color3f if inp == "diffuseColor" else Sdf.ValueTypeNames.Float
+        surf.CreateInput(inp, in_t).ConnectToSource(r.ConnectableAPI(), "result")
+    mat.CreateSurfaceOutput().ConnectToSource(surf.ConnectableAPI(), "surface")
+    return mat
+
+
 def _mesh(stage, path, pts, counts, idx, mat) -> UsdGeom.Mesh:
     m = UsdGeom.Mesh.Define(stage, path)
     m.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*q) for q in pts]))
@@ -185,7 +201,10 @@ class Cell:
         self.m_print = _material(s, "/World/Looks/NestPrint", (0.16, 0.17, 0.19), 0.8, 0.0)
         if ps.material == "steel":
             self.m_steel = _mdl_material(s, "/World/Looks/Steel", "Steel_Stainless")
-            self.m_rust = _mdl_material(s, "/World/Looks/Rust", "RustedMetal")
+            # Not NVIDIA's RustedMetal: on these meshes (no texture coordinates) it rendered
+            # as one flat dark brown, which read as a normal black-oxide finish. Rust is
+            # painted per vertex instead (geometry.rust_pattern).
+            self.m_rust = _vertex_painted_material(s, "/World/Looks/RustPainted")
 
         # Floor and table.
         _box(s, "/World/Floor", (6.0, 6.0, 0.02), (0.4, 0.0, FLOOR_Z - 0.01), self.m_floor)
@@ -357,12 +376,13 @@ class Cell:
         UsdShade.MaterialBindingAPI.Apply(self.crack_mesh.GetPrim()).Bind(
             self.m_crack, UsdShade.Tokens.strongerThanDescendants)
         self._chip_points = None  # the nut's original mesh points, read on first use
+        self._rust_points = None
         for prim in self.parts.values():
             _visible(prim, False)
 
-    def _chip_mesh(self) -> UsdGeom.Mesh:
-        """The chipped nut's visual mesh (inside the referenced asset)."""
-        root = self.stage.GetPrimAtPath("/World/Parts/defect_chip/asset")
+    def _chip_mesh(self, holder: str = "defect_chip") -> UsdGeom.Mesh:
+        """A referenced part's visual mesh (inside the referenced asset)."""
+        root = self.stage.GetPrimAtPath(f"/World/Parts/{holder}/asset")
         for p in Usd.PrimRange(root):
             if p.IsA(UsdGeom.Mesh):
                 return UsdGeom.Mesh(p)
@@ -467,7 +487,8 @@ class Cell:
             self._set_gap(self.ps.gap_empty)
 
         if spec.part_location == "gripper":
-            p_xyz, p_rot = g_xyz, L.rot_z(0.0)
+            # Held across its flats: a hex nut is turned so the fingers close on flats.
+            p_xyz, p_rot = g_xyz, L.rot_z(self.ps.held_yaw_deg)
         else:
             p_xyz, p_rot = L.part_pose(spec)
         _set_matrix(part, p_rot, p_xyz)
@@ -508,16 +529,27 @@ class Cell:
         k = self.ps.gripper_scale  # the same scale as the parts: 1 for cubes, 0.5 for nuts
         cp = spec.checkpoint
         if cp == "CP_PRE_GRASP":
-            return (CARRIER_SLOT[0], CARRIER_SLOT[1], CARRIER_TOP + 0.02 * k)
+            return (CARRIER_SLOT[0], CARRIER_SLOT[1], CARRIER_TOP + self.ps.inspect_aim_dz)
         if cp == "CP_POST_PLACE":
-            return (FIXTURE_CENTER[0], FIXTURE_CENTER[1], self.ps.fixture_base_top + 0.02 * k)
+            return (FIXTURE_CENTER[0], FIXTURE_CENTER[1], self.ps.fixture_base_top + self.ps.inspect_aim_dz)
         # Lift/transport: frame the gripper and whatever is (or isn't) under it.
         return (g_xyz[0], g_xyz[1], g_xyz[2] - 0.04 * k)
 
     def _apply_fastener_defect(self, key, spec):
         """Chip: cut a hex corner of the real nut mesh. Crack: lay a ribbon on the flat
-        that faces the close-up camera. Rust: nothing to do here; it's the material."""
+        that faces the close-up camera. Rust: paint rust patches on the nut's vertices."""
         ps = self.ps
+        if key == ("defective", "rust"):
+            mesh = self._chip_mesh("defect_rust")
+            if self._rust_points is None:
+                self._rust_points = [tuple(v) for v in mesh.GetPointsAttr().Get()]
+            cols, metal, rough = rust_pattern(self._rust_points, spec.seed, spec.truth["rust_coverage"])
+            pv = UsdGeom.PrimvarsAPI(mesh)
+            pv.CreatePrimvar("rustColor", Sdf.ValueTypeNames.Color3fArray, UsdGeom.Tokens.vertex).Set(
+                Vt.Vec3fArray([Gf.Vec3f(*c) for c in cols]))
+            pv.CreatePrimvar("rustMetal", Sdf.ValueTypeNames.FloatArray, UsdGeom.Tokens.vertex).Set(Vt.FloatArray(metal))
+            pv.CreatePrimvar("rustRough", Sdf.ValueTypeNames.FloatArray, UsdGeom.Tokens.vertex).Set(Vt.FloatArray(rough))
+            return
         if key == ("defective", "chip"):
             mesh = self._chip_mesh()
             if self._chip_points is None:

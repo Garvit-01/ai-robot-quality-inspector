@@ -234,7 +234,7 @@ def part_pose(spec) -> tuple[tuple[float, float, float], Mat3]:
 def gripper_anchor(spec) -> tuple[float, float, float]:
     if spec.gripper_at == "above_carrier":
         return CARRIER_SLOT[0], CARRIER_SLOT[1], CARRIER_TOP
-    return FIXTURE_CENTER[0], FIXTURE_CENTER[1], FIXTURE_BASE_TOP
+    return FIXTURE_CENTER[0], FIXTURE_CENTER[1], part_set(spec).fixture_base_top
 
 
 def usd_matrix_rows(R: Mat3, t) -> list[list[float]]:

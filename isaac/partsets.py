@@ -16,9 +16,16 @@ the Omniverse licence allows publishing renders of them, not redistributing them
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 ASSET_ROOT = "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1"
+
+# Workshop HDR environments (same asset server). Metal only looks like metal with real
+# surroundings to reflect. Kept here, not in cell.py, so the randomisation that picks one
+# can be unit-tested without Isaac Sim.
+WORKSHOP_HDRS = tuple(f"{ASSET_ROOT}/NVIDIA/Assets/Skies/Indoor/{n}" for n in (
+    "autoshop_01_4k.hdr", "ZetoCG_com_WarehouseInterior2b.hdr", "old_bus_depot_4k.hdr",
+    "carpentry_shop_01_4k.hdr"))
 
 
 @dataclass(frozen=True)
@@ -63,15 +70,25 @@ class PartSet:
     # Close-up camera offset from the region of interest, for inspecting the part
     # (before grasp, after place)...
     closeup_offset: tuple[float, float, float]
-    # Plain-language descriptions for the verifier prompt (config part_reference)
-    describe: dict = field(default_factory=dict)
     material: str = "paint"  # paint (procedural colour) | steel (MDL metal)
+    # Fault parameter ranges that must scale with the part. Defaults are the cube's.
+    f1_offset_mm: tuple[float, float] = (15.0, 40.0)
+    chip_mm: tuple[float, float] = (12.0, 20.0)
+    crack_mm: tuple[float, float] = (22.0, 40.0)
+    # Top corners whose chip faces the inspection camera (numbering per part shape).
+    chip_corners: tuple[int, ...] = (1, 2)
+    # How a held part is turned in the gripper (degrees about z). A hex nut is gripped
+    # across its FLATS: with its corners on the y axis, that needs a 30 degree turn, or the
+    # 24 mm finger gap lands on the 27.7 mm corners and cuts 1.85 mm into the nut.
+    held_yaw_deg: float = 0.0
     # How far a correctly seated part may sit off centre: less than its clearance in the
     # pocket, or a "clean" seat would rest on the rim.
     seated_jitter_mm: float = 1.5
     # ...and for watching the gripper (after lift, after transport), which needs room for
     # the fingers AND whatever is, or isn't, below them. None = same as closeup_offset.
     closeup_offset_handling: tuple[float, float, float] | None = None
+    # Height above the carrier/fixture surface the inspection camera aims at.
+    inspect_aim_dz: float = 0.02
 
 
 CUBE = PartSet(
@@ -86,11 +103,6 @@ CUBE = PartSet(
     nest_inner=0.056,
     gap_open=0.090, gap_holding=0.05, gap_empty=0.008, gripper_scale=1.0,
     closeup_offset=(0.34, -0.12, 0.28),
-    describe={
-        "correct": "a 50 mm matte grey cube with a flat top and square, unchipped edges",
-        "wrong": "any part that is not a 50 mm cube — different size, or a non-cubic shape",
-        "defective": "a 50 mm cube with a visible defect: a chipped corner, a crack, or a dent",
-    },
 )
 
 _nut16_url, _nut16_prim = _factory("factory_nut_m16_loose")
@@ -111,18 +123,26 @@ FASTENER = PartSet(
     fixture_base_top=0.012, fixture_wall_top=0.020,
     nest_inner=0.032,
     gap_open=0.045, gap_holding=0.024, gap_empty=0.004, gripper_scale=0.5,
-    # Half the cube's distance was still too far: the nut came out ~60 px wide, so a 4 mm
-    # chip was a handful of pixels. An inspection camera for M16 parts sits this close.
-    closeup_offset=(0.085, -0.03, 0.07),
+    # Close enough that a 4 mm chip is ~35 px, far enough that every scene's part stays in
+    # frame. Searched over 1,375 pre-grasp scenes with camera jitter (tests/test_fastener.py):
+    # the first, tighter framing cropped the 41 mm bolt's top in 88 scenes and displaced
+    # nuts in 7; aiming 14 mm up at 1.3x this distance keeps all of them inside (worst 0.96).
+    closeup_offset=(0.1105, -0.039, 0.091),
+    inspect_aim_dz=0.014,
     # A 27.7 mm across-corners nut in a 30 mm counterbore has 1.15 mm of clearance.
     seated_jitter_mm=0.8,
     closeup_offset_handling=(0.17, -0.06, 0.14),
-    describe={
-        "correct": "an M16 hex nut: bright steel, 24 mm across the flats, threaded hole, undamaged",
-        "wrong": "any part that is not an M16 nut — a bolt, or a nut of a different size",
-        "defective": "an M16 nut with visible damage: a chipped corner, a crack, or rust",
-    },
     material="steel",
+    # The close-up is about 4x tighter than the cube's: a 15-40 mm shift pushed the nut
+    # partly out of frame in 36% of displaced scenes (code review). 8-20 mm still puts a
+    # 27.7 mm nut clearly over the 32 mm outline.
+    f1_offset_mm=(8.0, 20.0),
+    chip_mm=(3.0, 5.0),
+    crack_mm=(6.0, 10.0),  # a 13 mm-tall flat holds about 10.4 mm at steep angles
+    # Corners 4 (330 deg) and 5 (30 deg) face the camera (~340 deg). Corner 3 (270 deg)
+    # was visible but foreshortened (facet facing 0.33-0.54 toward the camera, vs 0.86).
+    chip_corners=(4, 5),
+    held_yaw_deg=30.0,
 )
 
 PART_SETS = {"cube": CUBE, "fastener": FASTENER}

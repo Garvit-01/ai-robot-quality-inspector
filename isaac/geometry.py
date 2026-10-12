@@ -212,3 +212,53 @@ def block_with_round_hole(outer: float, radius: float, z0: float, z1: float, seg
         idx += [bore_bot, nbore_bot, nbore_top, bore_top][::-1]  # bore wall, facing the hole
         counts += [4, 4, 4]
     return pts, counts, idx
+
+
+def rust_pattern(points, seed: int, coverage: float, cell: float = 0.004):
+    """Patchy rust painted per vertex: (colours, metallic, roughness) lists, one per point.
+
+    NVIDIA's RustedMetal material rendered as a flat dark brown on the fastener meshes —
+    they have no texture coordinates, so the texture collapsed to one texel and the "rusty"
+    nut looked like a normal black-oxide finish (an ambiguous label). This paints rust
+    directly instead: smooth 3-D value noise with `cell`-metre features picks the
+    `coverage` fraction of the surface that is rust (orange-brown, rough, not metallic);
+    the rest stays steel. Deterministic in `seed`.
+    """
+    import math
+    import random
+
+    def h(ix, iy, iz):
+        return random.Random((ix * 73856093) ^ (iy * 19349663) ^ (iz * 83492791) ^ (seed * 2654435761)).random()
+
+    def smooth(t):
+        return t * t * (3 - 2 * t)
+
+    def noise(x, y, z):
+        x, y, z = x / cell, y / cell, z / cell
+        ix, iy, iz = math.floor(x), math.floor(y), math.floor(z)
+        fx, fy, fz = smooth(x - ix), smooth(y - iy), smooth(z - iz)
+        v = 0.0
+        for dx in (0, 1):
+            for dy in (0, 1):
+                for dz in (0, 1):
+                    w = (fx if dx else 1 - fx) * (fy if dy else 1 - fy) * (fz if dz else 1 - fz)
+                    v += w * h(ix + dx, iy + dy, iz + dz)
+        return v
+
+    vals = [noise(*p) + 0.5 * noise(p[0] * 2.3 + 11, p[1] * 2.3 + 7, p[2] * 2.3 + 3) for p in points]
+    order = sorted(vals)
+    thresh = order[max(0, min(len(order) - 1, int(len(order) * (1 - coverage))))]
+    rng = random.Random(seed * 31 + 7)
+    rust_a, rust_b = (0.42, 0.17, 0.06), (0.62, 0.30, 0.10)  # dark and light rust
+    colours, metal, rough = [], [], []
+    for v in vals:
+        if v >= thresh:
+            t = rng.random()
+            colours.append(tuple(rust_a[i] + (rust_b[i] - rust_a[i]) * t for i in range(3)))
+            metal.append(0.05)
+            rough.append(0.9)
+        else:
+            colours.append((0.72, 0.72, 0.74))
+            metal.append(1.0)
+            rough.append(0.25)
+    return colours, metal, rough
