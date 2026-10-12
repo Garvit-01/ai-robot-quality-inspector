@@ -175,6 +175,7 @@ def summarise(rows: list[dict]) -> dict:
 def render_md(meta: dict, s: dict) -> str:
     lines = [f"# Verifier benchmark — `{meta['model']}`", "",
              f"Scenes: `{meta['scene_dir']}` ({s['overall']['n']}) · views: {', '.join(meta['views'])} · "
+             f"prompt {meta.get('prompt_version')} · "
              f"run {meta['started']}", ""]
     o = s["overall"]
     lines += ["## Headline", "",
@@ -232,6 +233,7 @@ def main() -> int:
     out = args.out or REPO / "runs" / "bench" / tag
     out.mkdir(parents=True, exist_ok=True)
     meta = {"scene_dir": str(args.scene_dir), "model": model, "views": views,
+            "prompt_version": cfg["prompts"].get("version", "unversioned"),
             "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     print(f"[bench] {len(labels)} scenes · {model} · views={views} -> {out}", flush=True)
 

@@ -49,11 +49,32 @@ part_reference:
   defective: "a 50 mm cube with a visible defect: a chipped corner, a crack, or a dent"
 
 prompts:
+  # Bump on every change; it is recorded in each benchmark run so results stay traceable.
+  # v0 -> v1 (tuned on the dev split only, seeds 2000-2059; never on eval 5000-5119):
+  #   + a description of the cell, so "where it should be" and "how big" have referents
+  #   + the AprilTag as a 50 mm size reference
+  #   + per-checkpoint checklists; the transport rule that an empty gripper means dropped
+  #   - "centred on the carrier", which was simply wrong: the part's slot is off-centre
+  version: v1
+
   system: |
     You are a quality and process verifier for a robot work cell. You look at camera
     images and answer one question about the current step.
     Answer ONLY with a JSON object matching the schema. No prose, no markdown, no code fences.
     Be conservative: if you cannot see clearly, use failure_type "unclear".
+
+    What the cell looks like:
+    - A light-coloured carrier tile on the table. One half holds a black-and-white AprilTag
+      marker; the part sits in the other, empty half, square to the tile's edges.
+    - The AprilTag's black square is 50 mm wide: the same width as a correct part. Use it as
+      a size reference.
+    - A dark fixture block with a square pocket. A correctly placed part sits down inside the
+      pocket.
+    - A red-orange open box: the reject bin.
+    - The robot's gripper: a dark palm with two dark fingers pointing down. A held part is
+      clamped between the two finger pads.
+    - Images are taken from above at an angle, so a cube shows three faces. Do not mistake
+      that perspective for a different shape.
 
   schema_block: |
     Respond with exactly this JSON shape:
@@ -74,38 +95,46 @@ prompts:
 
   checkpoints:
     CP_PRE_GRASP: |
-      Checkpoint: CP_PRE_GRASP. The robot is about to grasp a part from the carrier tile.
+      Checkpoint: CP_PRE_GRASP. The robot is about to grasp the part waiting on the carrier.
       The correct part is: {correct}.
-      A wrong part is: {wrong}.
-      A defective part is: {defective}.
-      Question: Is the part on the carrier the correct type, free of visible defects, and
-      roughly where expected (centered on the carrier, not rotated far off square)?
-      Use wrong_part if the geometry or size is wrong. Use defective_part if it is the right
-      shape but visibly damaged. Use part_displaced if it is the correct, undamaged part but
-      clearly offset or rotated on the carrier. Otherwise none.
+      Check, in this order, and report the FIRST problem you find:
+      1. Shape and size: is it a cube about as wide as the AprilTag's black square? A
+         cylinder, a tall block, or a clearly smaller cube is wrong_part.
+      2. Damage: look at every corner and edge. A corner that is cut off, a small slanted
+         facet, a bright bare-metal patch, or a dark crack line is defective_part.
+      3. Position: it should sit squarely in the empty half of the carrier, beside the tag,
+         edges parallel to the carrier's edges. Clearly shifted toward an edge or the tag,
+         or visibly rotated, is part_displaced.
+      If all three are fine: step_ok true, failure_type none.
+      location_hint is carrier in every case.
 
     CP_POST_LIFT: |
-      Checkpoint: CP_POST_LIFT. The robot has just closed its gripper and lifted.
-      Question: Is the part actually held in the gripper?
-      Use empty_grasp if the gripper is closed on nothing. If the part is visible somewhere
-      other than the gripper, say where with location_hint. Otherwise none.
+      Checkpoint: CP_POST_LIFT. The robot has just closed its gripper and lifted it.
+      Question: is the part held between the two finger pads?
+      Look at the space between the fingers. If the part is clamped there, it is held:
+      failure_type none, location_hint gripper.
+      If the fingers are closed together with nothing between them, and the part is still
+      sitting on the carrier below, the grasp missed: empty_grasp, location_hint carrier.
 
     CP_POST_TRANSPORT: |
-      Checkpoint: CP_POST_TRANSPORT. The robot has moved above the place fixture.
-      Question: Is the part still held in the gripper?
-      If it is not, where did it go? Use part_dropped_recoverable if it is resting on the
-      table or carrier within the robot's working area. Use part_dropped_unrecoverable if it
-      has fallen off the table or is clearly outside the working area. If the gripper is
-      empty and the part is nowhere to be seen in the cell, it has fallen off the table:
-      use part_dropped_unrecoverable with location_hint off_table. Otherwise none.
+      Checkpoint: CP_POST_TRANSPORT. The robot has carried the part to a point above the
+      fixture. The part WAS lifted successfully earlier, so an empty gripper here always means
+      the part was dropped on the way. Never answer empty_grasp at this checkpoint.
+      - Part clamped between the finger pads: none, location_hint gripper.
+      - Gripper empty and the part is lying on the table: part_dropped_recoverable,
+        location_hint table_in_reach.
+      - Gripper empty and the part is nowhere to be seen in the cell: it fell off the table.
+        part_dropped_unrecoverable, location_hint off_table.
 
     CP_POST_PLACE: |
-      Checkpoint: CP_POST_PLACE. The robot has released the part into the fixture nest and
-      retreated.
-      Question: Is the part correctly seated in the fixture?
-      Correct seating means sitting flat and flush in the pocket, square to its walls.
-      Use misaligned_seat if it is tilted, raised on one edge, rotated off square, or
-      sitting proud of the pocket. Otherwise none.
+      Checkpoint: CP_POST_PLACE. The robot has released the part into the fixture pocket and
+      moved away.
+      Question: is the part correctly seated?
+      Correctly seated: down inside the pocket, top face level, edges parallel to the pocket
+      walls, a similar gap all round.
+      misaligned_seat: tilted (one edge or corner higher than the other), resting on the rim
+      or a wall, or sitting noticeably higher than a seated part would.
+      location_hint is fixture in every case.
 
 # Only for reporting cost in results.md. Update from the live Nebius console before runs.
 pricing:
