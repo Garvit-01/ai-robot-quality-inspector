@@ -125,7 +125,7 @@ def main() -> int:
         simulation_app.update()
     stage = ctx.get_stage()
 
-    cell = Cell(stage, TAG_TEXTURE)
+    cell = Cell(stage, TAG_TEXTURE, (args.width, args.height))
     for _ in range(20):
         simulation_app.update()
 
