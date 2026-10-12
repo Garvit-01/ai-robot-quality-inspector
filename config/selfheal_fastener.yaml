@@ -62,6 +62,11 @@ prompts:
   #   Dev: 61.7% failure type, 88.3% location — best of v1/v2/v3. Prompt tuning stops here:
   #   gains had flattened at ~55-62%, and the remaining misses are perception, not wording.
   # fastener-v1 = prompt v3's structure, with the cell and part descriptions for the M16 nut.
+  # fastener-v2 (tried on dev, dropped): used the 32 mm printed outline as the size
+  #   reference and said an oversize part is wrong, not displaced. 50.0% vs v1's 55.0%,
+  #   and no gain where it was aimed: wrong-size nuts 0/6 with either prompt, chips 0/4.
+  #   Zero-shot Gemma 3 can't judge a nut's size or see a 4 mm chip, however it is asked;
+  #   that is perception, not wording. Prompt tuning for fasteners stops here.
   version: fastener-v1
 
   system: |
