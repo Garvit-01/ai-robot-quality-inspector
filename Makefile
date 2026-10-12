@@ -13,13 +13,16 @@ DEMO      := runs/scenes/demo_$(PART)
 EVAL      := runs/scenes/$(PREFIX)eval_check
 DEMO_SEEDS := 1000,1001,1002,1003,1005,1007,1009,1012,1014,1031
 
-.PHONY: help status test smoke demo bench-demo eval report
+SEED      ?= 1031
+
+.PHONY: help status test smoke demo view bench-demo eval report
 
 help:  ## list what you can run
 	@echo "make status       progress dashboard: milestones, latest results, what's running (free, instant)"
 	@echo "make test         all unit tests (free, ~2 min)"
 	@echo "make smoke        live calls: Nemotron planner + vision verifier (< 1 cent, ~20 s)"
 	@echo "make demo         render one scene of each fault type and open them (free, ~1-2 min)"
+	@echo "make view SEED=1031  open ONE scene in Isaac Sim with its window, to look around in 3D"
 	@echo "make bench-demo   score the verifier on those demo scenes (~1 cent, ~1 min)"
 	@echo "make eval         full held-out check: render 120 + score + A/B/C/D + PDF (~5 cents, ~15 min)"
 	@echo "make report       rebuild the PDF from the latest results (free, seconds)"
@@ -41,6 +44,9 @@ demo:
 	$(ISAAC) isaac/stage_scene.py --part-set $(PART) --seeds $(DEMO_SEEDS) --out $(DEMO) 2>&1 | grep --line-buffered "\[stage\]"
 	$(PY) eval/contact_sheet.py $(DEMO) --view closeup --cols 5
 	-xdg-open $(DEMO)/contact_closeup.png >/dev/null 2>&1 &
+
+view:  ## needs the DCV desktop (a screen); don't run while a render is going
+	$(ISAAC) isaac/view_scene.py --part-set $(PART) --seed $(SEED)
 
 bench-demo:
 	$(PY) eval/bench_verifier.py $(DEMO) --config $(CONFIG) --workers 3 --out runs/bench/demo_$(PART)
