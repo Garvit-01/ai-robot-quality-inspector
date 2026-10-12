@@ -45,7 +45,11 @@ parser.add_argument("--out", type=Path, default=REPO / "runs" / "scenes" / "smok
 parser.add_argument("--width", type=int, default=1024)
 parser.add_argument("--height", type=int, default=768)
 parser.add_argument("--rt-subframes", type=int, default=8,
-                    help="path-tracing subframes per capture; more = less ghosting after moves")
+                    help="RTX render subframes per capture")
+parser.add_argument("--settle-steps", type=int, default=3,
+                    help="frames rendered and discarded after each re-pose, before the capture. "
+                         "RTX keeps temporal history (anti-aliasing, denoiser); without settling, a "
+                         "faint ghost of the PREVIOUS scene shows in the new frame")
 parser.add_argument("--no-dr", action="store_true", help="disable domain randomisation")
 args, _unknown = parser.parse_known_args()
 
@@ -113,7 +117,7 @@ def main() -> int:
     out: Path = args.out
     (out / "images").mkdir(parents=True, exist_ok=True)
     (out / "labels").mkdir(parents=True, exist_ok=True)
-    manifest = (out / "manifest.jsonl").open("a")
+    manifest = (out / "manifest.jsonl").open("w")  # "a" duplicated rows on every re-run
 
     ctx = omni.usd.get_context()
     ctx.new_stage()
@@ -151,6 +155,8 @@ def main() -> int:
             spec = faults.make_scene(seed)
             dr = make_dr(seed, not args.no_dr)
             placed = cell.apply(spec, dr)
+            for _ in range(args.settle_steps):
+                rep.orchestrator.step(rt_subframes=args.rt_subframes)
             rep.orchestrator.step(rt_subframes=args.rt_subframes)
 
             ov = out / "images" / f"{seed}_overview.png"
