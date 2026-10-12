@@ -9,47 +9,18 @@ import base64
 import os
 import sys
 from pathlib import Path
-from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError  # noqa: F401  (re-exported)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = REPO_ROOT / "config" / "selfheal.yaml"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))  # so `import selfheal` works from scripts/ and eval/
 
-FailureType = Literal[
-    "none",
-    "empty_grasp",
-    "part_displaced",
-    "part_dropped_recoverable",
-    "part_dropped_unrecoverable",
-    "misaligned_seat",
-    "wrong_part",
-    "defective_part",
-    "unclear",
-]
+from selfheal.verdict import FailureType, LocationHint, Verdict, strip_to_json  # noqa: E402  (moved; re-exported)
 
-LocationHint = Literal[
-    "gripper",
-    "carrier",
-    "table_in_reach",
-    "table_out_of_reach",
-    "off_table",
-    "fixture",
-    "reject_bin",
-    "unknown",
-]
-
-
-class Verdict(BaseModel):
-    """Strict schema for a verifier response. Anything else is a parse failure."""
-
-    checkpoint: str
-    step_ok: bool
-    failure_type: FailureType
-    evidence: str = Field(max_length=500)
-    location_hint: LocationHint
-    confidence: float = Field(ge=0.0, le=1.0)
+__all__ = ["FailureType", "LocationHint", "Verdict", "strip_to_json", "load_config", "load_dotenv",
+           "require_env", "client_for", "image_data_uri", "REPO_ROOT", "SHARED_KEY_ENV"]
 
 
 def load_config() -> dict:
@@ -107,24 +78,6 @@ def client_for(section: dict):
         api_key=api_key,
         timeout=section.get("timeout_s", 20),
     )
-
-
-def strip_to_json(text: str) -> str:
-    """Reasoning models wrap answers in <think> blocks and markdown fences. Strip both.
-
-    Takes everything after the LAST closing think tag, since nested or repeated blocks
-    show up in practice, then peels one code fence if present.
-    """
-    out = text
-    for tag in ("</think>", "</thinking>"):
-        if tag in out:
-            out = out.rsplit(tag, 1)[1]
-    out = out.strip()
-    if out.startswith("```"):
-        out = out.split("\n", 1)[1] if "\n" in out else out[3:]
-        if "```" in out:
-            out = out.rsplit("```", 1)[0]
-    return out.strip()
 
 
 def image_data_uri(path: Path, longest_side: int, quality: int) -> str:
