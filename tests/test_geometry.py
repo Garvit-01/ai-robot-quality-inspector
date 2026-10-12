@@ -76,3 +76,28 @@ def test_rejects_impossible_chip():
         chipped_cube_mesh(EDGE, 0.0, 0)
     with pytest.raises(ValueError):
         chipped_cube_mesh(EDGE, EDGE, 0)
+
+
+# --- crack ribbon --------------------------------------------------------------------
+from geometry import crack_ribbon  # noqa: E402
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_crack_stays_on_the_top_face(seed):
+    import random
+    rng = random.Random(seed)
+    length, angle = rng.uniform(0.022, 0.040), rng.uniform(0, 180)
+    pts, counts, idx = crack_ribbon(length, angle, EDGE / 2, seed)
+    assert all(abs(x) < EDGE / 2 - 0.002 and abs(y) < EDGE / 2 - 0.002 and z == 0 for x, y, z in pts)
+    assert counts == [4] * len(counts) and len(idx) == 4 * len(counts)
+
+
+def test_crack_faces_up_and_is_hairline_wide():
+    pts, counts, idx = crack_ribbon(0.03, 33.0, EDGE / 2, 7)
+    for i in range(len(counts)):
+        a, b, c = (pts[j] for j in idx[4 * i:4 * i + 3])
+        nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        assert nz > 0, "a crack quad faces down and would be invisible from above"
+    widths = [((pts[2 * k][0] - pts[2 * k + 1][0]) ** 2 + (pts[2 * k][1] - pts[2 * k + 1][1]) ** 2) ** 0.5
+              for k in range(len(pts) // 2)]
+    assert max(widths) <= 0.0009 + 1e-12 and min(widths) > 0
