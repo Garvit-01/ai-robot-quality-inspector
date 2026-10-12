@@ -81,7 +81,8 @@ class PlannerCall:
 
 
 def policy_c(client, model: str, fused: dict, checkpoint: str, attempts: int = 0,
-             temperature: float = 0.0, sensor_confirmed_empty: bool = False) -> PlannerCall:
+             temperature: float = 0.0, sensor_confirmed_empty: bool = False,
+             expected_part: str = "a 50 mm matte grey cube") -> PlannerCall:
     """Nemotron picks one tool from the whitelist; the guardrail runs after it, in code.
     Called only when the fused verdict reports a problem — a clean step never reaches
     the planner. Any failure (transport, no tool call, bad arguments) is a stop."""
@@ -91,7 +92,7 @@ def policy_c(client, model: str, fused: dict, checkpoint: str, attempts: int = 0
         "verifier_report": {k: fused[k] for k in ("checkpoint", "step_ok", "failure_type",
                                                    "location_hint", "evidence")},
         "recovery_attempts_this_cycle": attempts,
-        "expected_part": "50 mm matte grey cube",
+        "expected_part": expected_part,
     }
     t0 = time.monotonic()
     try:

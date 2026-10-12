@@ -57,10 +57,16 @@ def main() -> int:
                          "a slow API shows up as a latency risk instead of as bad judgement")
     ap.add_argument("--planner-model", default=None, help="override PLANNER_MODEL_ID")
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--config", type=Path, default=None,
+                    help="alternative config, e.g. config/selfheal_fastener.yaml for nut scenes")
     args = ap.parse_args()
 
     load_dotenv()
-    cfg = load_config()
+    if args.config:
+        import yaml
+        cfg = yaml.safe_load(args.config.read_text())
+    else:
+        cfg = load_config()
     client = client_for({**cfg["planner"], "timeout_s": args.planner_timeout}).with_options(max_retries=1)
     model = args.planner_model or require_env(cfg["planner"]["model_id_env"])
     prod_budget_ms = 1000 * cfg["planner"]["timeout_s"]
@@ -95,7 +101,8 @@ def main() -> int:
     def decide_c(row: dict) -> dict:
         call = policy_c(client, model, row["fused"], row["checkpoint"],
                         temperature=cfg["planner"].get("temperature", 0.0),
-                        sensor_confirmed_empty=(row["signal"] == "empty"))
+                        sensor_confirmed_empty=(row["signal"] == "empty"),
+                        expected_part=cfg["part_reference"]["correct"])
         return {"decision": call.decision, "raw_tool": call.raw_tool, "override": call.override,
                 "latency_ms": round(call.latency_ms), "tokens_in": call.tokens_in,
                 "tokens_out": call.tokens_out, "error": call.error}

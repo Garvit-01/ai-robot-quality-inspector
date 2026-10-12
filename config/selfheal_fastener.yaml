@@ -1,0 +1,156 @@
+# Self-Healing Work Cell — FASTENER part set (M16 nut). Same as selfheal.yaml except the
+# part descriptions and prompts. Use with: bench_verifier.py --config config/selfheal_fastener.yaml
+# Self-Healing Work Cell — all tunables live here.
+# Model IDs and base URLs come from the environment (see .env.example).
+# NEVER hardcode a model ID or URL in Python. Tier 1 -> Tier 2 must be a config swap only.
+
+run:
+  condition: C                   # A | B | C | D  (see SPEC.md §8)
+  max_recoveries_per_cycle: 2
+  seed_base: 1000
+  scenes_per_fault_class: 25     # Tier 1. Tier 2 scales this for training only.
+
+verifier:
+  base_url_env: VERIFIER_BASE_URL
+  api_key_env: VERIFIER_API_KEY
+  model_id_env: VERIFIER_MODEL_ID
+  timeout_s: 20
+  max_retries: 1                 # one "valid JSON only" nudge, then -> unclear
+  temperature: 0.0
+  image_longest_side_px: 1024
+  jpeg_quality: 85
+  # Which views each checkpoint sends. Crops matter more than resolution for
+  # small tilts/offsets — this is the main knob for the M2 go/no-go.
+  # Rendered views per scene (isaac/stage_scene.py): an overview of the cell and a
+  # close-up framed on the checkpoint's region. The benchmark sends both by default.
+  views: [overview, closeup]
+
+planner:
+  base_url_env: PLANNER_BASE_URL
+  api_key_env: PLANNER_API_KEY
+  model_id_env: PLANNER_MODEL_ID
+  timeout_s: 20
+  temperature: 0.0
+
+# Hard rules applied in code after the model answers. The prompt is not a guardrail.
+fusion:
+  gripper_empty_threshold_rad: 0.70   # finger joint beyond this => nothing in hand
+  gripper_expected_width_rad: 0.42    # nominal closed-on-part width
+  gripper_width_tolerance_rad: 0.08
+
+tolerances:
+  seated_position_mm: 5.0
+  seated_tilt_deg: 3.0
+
+# Reference description given to the verifier so it knows what "correct" looks like.
+part_reference:
+  correct: "an M16 hex nut: bright steel, 24 mm across the flats, a threaded hole, undamaged"
+  wrong: "any part that is not an M16 nut: a bolt, or a nut of a different size"
+  defective: "an M16 nut with visible damage: a corner cut off, a crack, or rust"
+
+prompts:
+  # Bump on every change; it is recorded in each benchmark run so results stay traceable.
+  # v0 -> v1 (tuned on the dev split only, seeds 2000-2059; never on eval 5000-5119):
+  #   + a description of the cell, so "where it should be" and "how big" have referents
+  #   + the AprilTag as a 50 mm size reference
+  #   + per-checkpoint checklists; the transport rule that an empty gripper means dropped
+  #   - "centred on the carrier", which was simply wrong: the part's slot is off-centre
+  # v2 (tried, dropped): pointed position checks at the new nest outline and re-described
+  #   damage. 53.3% on dev vs v1's 60.0% (identical re-runs changed 0-3 answers, so this
+  #   was a real if small difference on these scenes).
+  # v3 = v1 + a definition of location_hint, which was scored but never defined.
+  #   Dev: 61.7% failure type, 88.3% location — best of v1/v2/v3. Prompt tuning stops here:
+  #   gains had flattened at ~55-62%, and the remaining misses are perception, not wording.
+  # fastener-v1 = prompt v3's structure, with the cell and part descriptions for the M16 nut.
+  version: fastener-v1
+
+  system: |
+    You are a quality and process verifier for a robot work cell. You look at camera
+    images and answer one question about the current step.
+    Answer ONLY with a JSON object matching the schema. No prose, no markdown, no code fences.
+    Be conservative: if you cannot see clearly, use failure_type "unclear".
+
+    What the cell looks like:
+    - A light-coloured carrier tile on the table. One half holds a black-and-white AprilTag
+      marker; the part sits in the other half, inside a thin printed square outline.
+    - The AprilTag's black square is 50 mm wide. A correct part is an M16 hex nut, about
+      half that width (24 mm across the flats). Use the tag as a size reference.
+    - A dark fixture block with a round recess. A correctly placed nut sits down inside the
+      recess, flat.
+    - A red-orange open box: the reject bin.
+    - The robot's gripper: a dark palm with two dark fingers pointing down. A held part is
+      clamped between the two finger pads.
+    - Images are taken from above at an angle, so a nut shows its top face, its threaded
+      hole, and two or three of its six side faces. Steel reflects its surroundings, so
+      bright and dark patches on a clean nut are reflections, not damage.
+
+  schema_block: |
+    Respond with exactly this JSON shape:
+    {"checkpoint": "<the checkpoint name given below>",
+     "step_ok": <true|false>,
+     "failure_type": "<one of the enum values>",
+     "evidence": "<one short sentence describing what you actually see>",
+     "location_hint": "<one of the enum values>",
+     "confidence": <0.0 to 1.0>}
+
+    failure_type must be exactly one of:
+      none, empty_grasp, part_displaced, part_dropped_recoverable,
+      part_dropped_unrecoverable, misaligned_seat, wrong_part, defective_part, unclear
+
+    location_hint must be exactly one of:
+      gripper, carrier, table_in_reach, table_out_of_reach, off_table, fixture,
+      reject_bin, unknown
+    location_hint means where the part is RIGHT NOW: gripper if it is held, carrier or
+    fixture if it is sitting there, table_in_reach if it is lying on the table, off_table
+    if it fell off the table and cannot be seen. It is not where the part should go next.
+
+  checkpoints:
+    CP_PRE_GRASP: |
+      Checkpoint: CP_PRE_GRASP. The robot is about to grasp the part waiting on the carrier.
+      The correct part is: {correct}.
+      Check, in this order, and report the FIRST problem you find:
+      1. Shape and size: is it a hex nut about half as wide as the AprilTag's black square?
+         A bolt (a threaded shaft standing up), a clearly smaller nut, or a clearly larger
+         nut is wrong_part.
+      2. Damage: look at every corner, edge and side face. A corner cut off at a slant
+         (often a bright flat facet), a thin dark crack line on a face, or brown rust on the
+         surface is defective_part.
+      3. Position: it should sit inside the printed square outline. Clearly outside it, or
+         sticking well over its edge, is part_displaced.
+      If all three are fine: step_ok true, failure_type none.
+      location_hint is carrier in every case.
+
+    CP_POST_LIFT: |
+      Checkpoint: CP_POST_LIFT. The robot has just closed its gripper and lifted it.
+      Question: is the part held between the two finger pads?
+      Look at the space between the fingers. If the part is clamped there, it is held:
+      failure_type none, location_hint gripper.
+      If the fingers are closed together with nothing between them, and the part is still
+      sitting on the carrier below, the grasp missed: empty_grasp, location_hint carrier.
+
+    CP_POST_TRANSPORT: |
+      Checkpoint: CP_POST_TRANSPORT. The robot has carried the part to a point above the
+      fixture. The part WAS lifted successfully earlier, so an empty gripper here always means
+      the part was dropped on the way. Never answer empty_grasp at this checkpoint.
+      - Part clamped between the finger pads: none, location_hint gripper.
+      - Gripper empty and the part is lying on the table: part_dropped_recoverable,
+        location_hint table_in_reach.
+      - Gripper empty and the part is nowhere to be seen in the cell: it fell off the table.
+        part_dropped_unrecoverable, location_hint off_table.
+
+    CP_POST_PLACE: |
+      Checkpoint: CP_POST_PLACE. The robot has released the nut into the fixture's round
+      recess and moved away.
+      Question: is the nut correctly seated?
+      Correctly seated: down inside the round recess, flat, top face level.
+      misaligned_seat: tilted (one side higher than the other), resting on the rim of the
+      recess, or sitting on top of the fixture beside the recess.
+      location_hint is fixture in every case.
+
+# Only for reporting cost in results.md. Update from the live Nebius console before runs.
+pricing:
+  planner_usd_per_1m_input: null
+  planner_usd_per_1m_output: null
+  verifier_usd_per_1m_input: null
+  verifier_usd_per_1m_output: null
+  verifier_endpoint_usd_per_hour: null
