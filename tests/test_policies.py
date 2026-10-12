@@ -125,3 +125,21 @@ def test_baseline_b_outcomes_on_the_eval_split_are_what_its_design_implies():
             assert o == "quality_escape", s
         if sc.fault == "F0":
             assert o == "correct", s
+
+
+# --- guardrail --------------------------------------------------------------------------
+from selfheal.planner import guardrail  # noqa: E402
+
+
+@pytest.mark.parametrize("tool,ft,empty,expected", [
+    ("teleport", "none", False, "stop_and_alert"),                      # not whitelisted
+    ("reseat_part", "defective_part", False, "reject_to_bin"),          # bad part -> bin
+    ("continue_cycle", "wrong_part", False, "reject_to_bin"),
+    ("reseat_part", "unclear", False, "stop_and_alert"),                # never guess
+    ("continue_cycle", "unclear", False, "stop_and_alert"),
+    ("continue_cycle", "empty_grasp", True, "stop_and_alert"),          # sensor says empty
+    ("relocalize_and_regrasp", "empty_grasp", True, "relocalize_and_regrasp"),  # allowed
+    ("continue_cycle", "misaligned_seat", False, "continue_cycle"),     # judgement call stays the model's
+])
+def test_guardrail(tool, ft, empty, expected):
+    assert guardrail(tool, ft, empty)[0] == expected

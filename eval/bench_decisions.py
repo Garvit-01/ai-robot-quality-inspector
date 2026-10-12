@@ -94,7 +94,8 @@ def main() -> int:
 
     def decide_c(row: dict) -> dict:
         call = policy_c(client, model, row["fused"], row["checkpoint"],
-                        temperature=cfg["planner"].get("temperature", 0.0))
+                        temperature=cfg["planner"].get("temperature", 0.0),
+                        sensor_confirmed_empty=(row["signal"] == "empty"))
         return {"decision": call.decision, "raw_tool": call.raw_tool, "override": call.override,
                 "latency_ms": round(call.latency_ms), "tokens_in": call.tokens_in,
                 "tokens_out": call.tokens_out, "error": call.error}

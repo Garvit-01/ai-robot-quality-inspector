@@ -81,7 +81,7 @@ class PlannerCall:
 
 
 def policy_c(client, model: str, fused: dict, checkpoint: str, attempts: int = 0,
-             temperature: float = 0.0) -> PlannerCall:
+             temperature: float = 0.0, sensor_confirmed_empty: bool = False) -> PlannerCall:
     """Nemotron picks one tool from the whitelist; the guardrail runs after it, in code.
     Called only when the fused verdict reports a problem — a clean step never reaches
     the planner. Any failure (transport, no tool call, bad arguments) is a stop."""
@@ -113,7 +113,7 @@ def policy_c(client, model: str, fused: dict, checkpoint: str, attempts: int = 0
         args = json.loads(calls[0].function.arguments or "{}")
     except json.JSONDecodeError:
         return PlannerCall(STOP, name, "unparseable arguments -> stop", ms, tin, tout, None)
-    final, note = guardrail(name, fused["failure_type"])
+    final, note = guardrail(name, fused["failure_type"], sensor_confirmed_empty)
     region = args.get("region") if final == "relocalize_and_regrasp" else None
     if final == "relocalize_and_regrasp" and region not in ("carrier", "table"):
         final, region, note = "stop_and_alert", None, f"invalid region {region!r} -> stop"
