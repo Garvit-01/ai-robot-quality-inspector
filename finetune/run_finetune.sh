@@ -15,7 +15,8 @@
 #   setup     install PyTorch + Hugging Face libraries on the VM, download the model
 #   baseline  score the model BEFORE fine-tuning on the held-out scenes
 #   train     LoRA fine-tune on the training scenes
-#   eval      score the fine-tuned model on the same held-out scenes
+#   dev       score the fine-tuned model on the 60 DEV scenes — use this to compare runs
+#   eval      score the fine-tuned model on the same held-out scenes — only for the final pick
 #   pull      bring the adapter and the raw replies back here
 #   score     parse + score both runs exactly like every other benchmark, A/B/C/D, PDF
 #
@@ -107,7 +108,20 @@ step_train() {
 }
 
 # -----------------------------------------------------------------------------------------
-# 6. EVAL — the fine-tuned model (base + adapter) on the SAME held-out scenes.
+# 6a. DEV — the fine-tuned model on the 60 validation scenes. If you train more than once
+#     (different epochs, rank, data), pick the winner HERE. Picking by the held-out score
+#     would turn it into "best of N tries on the test" and overstate the result.
+# -----------------------------------------------------------------------------------------
+step_dev() {
+  say "dev: fine-tuned model on the dev scenes (for choosing between runs)"
+  vm ".venv/bin/python generate.py --data dev.jsonl --images scenes --adapter adapter --out gen_tuned_dev.jsonl"
+  eval $RSYNC "$VM_USER@$VM_IP:~/$VM_DIR/gen_tuned_dev.jsonl" "$DATA/gen/"
+  $PY finetune/score_generations.py "$DATA/dev.jsonl" "$DATA/gen/gen_tuned_dev.jsonl" \
+      --scene-dir "$VAL" --model "Cosmos-Reason1-7B + LoRA (dev)" --out runs/bench/fdev_v2__cosmos_tuned
+}
+
+# -----------------------------------------------------------------------------------------
+# 6b. EVAL — the fine-tuned model (base + adapter) on the SAME held-out scenes.
 # -----------------------------------------------------------------------------------------
 step_eval() {
   say "eval: fine-tuned model on the held-out scenes"
@@ -143,7 +157,7 @@ step_score() {
 }
 
 case "${1:-}" in
-  all) step_data; step_push; step_setup; step_baseline; step_train; step_eval; step_pull; step_score ;;
-  data|push|setup|baseline|train|eval|pull|score) "step_$1" ;;
+  all) step_data; step_push; step_setup; step_baseline; step_train; mkdir -p "$DATA/gen"; step_dev; step_eval; step_pull; step_score ;;
+  data|push|setup|baseline|train|dev|eval|pull|score) "step_$1" ;;
   *) sed -n '2,30p' "$0"; exit 1 ;;
 esac
