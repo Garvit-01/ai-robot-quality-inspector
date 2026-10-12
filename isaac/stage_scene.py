@@ -51,6 +51,8 @@ parser.add_argument("--settle-steps", type=int, default=3,
                          "RTX keeps temporal history (anti-aliasing, denoiser); without settling, a "
                          "faint ghost of the PREVIOUS scene shows in the new frame")
 parser.add_argument("--no-dr", action="store_true", help="disable domain randomisation")
+parser.add_argument("--part-set", default="cube", choices=("cube", "fastener"),
+                    help="cube: the original 50 mm cubes; fastener: NVIDIA's M16 nut and friends")
 args, _unknown = parser.parse_known_args()
 
 from isaacsim.simulation_app import SimulationApp  # noqa: E402
@@ -75,7 +77,7 @@ TAG_TEXTURE = HERE / "assets" / "tag36h11_id0_1000px.png"
 TABLE_COLOURS = [(0.55, 0.56, 0.58), (0.36, 0.42, 0.38), (0.62, 0.60, 0.55), (0.32, 0.34, 0.38)]
 
 
-def make_dr(seed: int, enabled: bool) -> dict:
+def make_dr(seed: int, enabled: bool, part_set: str = "cube") -> dict:
     """Domain randomisation for one scene, from its own seed-derived stream.
 
     Deliberately moderate. The goal is that a model learns "misaligned seat", not "the
@@ -101,7 +103,21 @@ def make_dr(seed: int, enabled: bool) -> dict:
         "key_elevation_deg": rng.uniform(40.0, 75.0),
         "key_azimuth_deg": rng.uniform(0.0, 360.0),
         "cam_jitter": (rng.uniform(-0.03, 0.03), rng.uniform(-0.03, 0.03), rng.uniform(-0.03, 0.03)),
+        **(_fastener_dr(seed) if part_set == "fastener" else {}),
     }
+
+
+def _fastener_dr(seed: int) -> dict:
+    """Extra randomisation for metal parts, from its own stream so cube scenes are
+    untouched. Steel reflects its surroundings, so the environment matters as much as the
+    lights: rotate through four workshop HDRs. A textured dome is brighter per unit of
+    intensity than a plain one, and the key light is softened to keep highlights in range
+    (values from the parts probe, which looked right)."""
+    from cell import WORKSHOP_HDRS
+    rng = random.Random(seed * 6271 + 5)
+    return {"hdr": WORKSHOP_HDRS[seed % len(WORKSHOP_HDRS)],
+            "dome_intensity": rng.uniform(450.0, 800.0),
+            "key_intensity": rng.uniform(300.0, 700.0)}
 
 
 def save_rgb(annot, path: Path) -> tuple[int, int]:
@@ -125,8 +141,8 @@ def main() -> int:
         simulation_app.update()
     stage = ctx.get_stage()
 
-    cell = Cell(stage, TAG_TEXTURE, (args.width, args.height))
-    for _ in range(20):
+    cell = Cell(stage, TAG_TEXTURE, (args.width, args.height), part_set=args.part_set)
+    for _ in range(20 if args.part_set == "cube" else 150):  # remote assets load once
         simulation_app.update()
 
     res = (args.width, args.height)
@@ -140,7 +156,7 @@ def main() -> int:
     # Warm-up: the first captures render before textures and shaders finish loading.
     # Pose a real scene and throw a few frames away so seed #1 isn't a broken image.
     first = int(args.seeds.split(",")[0]) if args.seeds else args.start
-    cell.apply(faults.make_scene(first), make_dr(first, not args.no_dr))
+    cell.apply(faults.make_scene(first, args.part_set), make_dr(first, not args.no_dr, args.part_set))
     for _ in range(3):
         rep.orchestrator.step(rt_subframes=args.rt_subframes)
 
@@ -152,8 +168,8 @@ def main() -> int:
         t0 = time.time()
         record = {"seed": seed}
         try:
-            spec = faults.make_scene(seed)
-            dr = make_dr(seed, not args.no_dr)
+            spec = faults.make_scene(seed, args.part_set)
+            dr = make_dr(seed, not args.no_dr, args.part_set)
             placed = cell.apply(spec, dr)
             for _ in range(args.settle_steps):
                 rep.orchestrator.step(rt_subframes=args.rt_subframes)

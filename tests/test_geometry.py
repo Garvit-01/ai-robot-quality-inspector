@@ -149,3 +149,27 @@ def test_flat_frame_sits_on_the_flat_and_faces_out():
     centre, u, v, n = hex_flat_frame(300.0, 0.024, 0.0065)
     assert abs((centre[0] ** 2 + centre[1] ** 2) ** 0.5 - 0.012) < 0.0005
     assert abs(sum(u[i] * n[i] for i in range(3))) < 1e-12 and v == (0.0, 0.0, 1.0)
+
+
+from geometry import block_with_round_hole  # noqa: E402
+
+
+def test_counterbore_faces_point_the_right_way():
+    pts, counts, idx = block_with_round_hole(0.08, 0.015, 0.012, 0.020, 48)
+    assert counts == [4] * (3 * 48)
+
+    def normal(face):
+        a, b, c = (pts[i] for i in face[:3])
+        u = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+        v = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+        return (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+
+    for k in range(48):
+        top, outer, bore = (idx[12 * k + 4 * j: 12 * k + 4 * j + 4] for j in range(3))
+        assert normal(top)[2] > 0
+        mid = [sum(pts[i][d] for i in outer) / 4 for d in range(2)]
+        n = normal(outer)
+        assert n[0] * mid[0] + n[1] * mid[1] > 0, "outer wall must face away from the centre"
+        mid = [sum(pts[i][d] for i in bore) / 4 for d in range(2)]
+        n = normal(bore)
+        assert n[0] * mid[0] + n[1] * mid[1] < 0, "bore wall must face into the hole"

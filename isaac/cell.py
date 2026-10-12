@@ -26,16 +26,26 @@ from pathlib import Path
 
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade, Vt
 
-from geometry import chipped_cube_mesh, crack_ribbon
+import partsets  # noqa: E402
+from geometry import (  # noqa: E402
+    block_with_round_hole, chipped_cube_mesh, crack_ribbon, hex_corner_cut, hex_flat_frame,
+    place_on_face,
+)
 
 # All dimensions and placement maths live in layout.py (pure Python, unit-tested).
 import layout as L  # noqa: E402
 from layout import (  # noqa: E402
     BIN_CENTER, BIN_SIZE, CARRIER_CENTER, CARRIER_SIZE, CARRIER_SLOT, CARRIER_TAG,
-    CARRIER_TOP, FINGER, FIXTURE_BASE_TOP, FIXTURE_CENTER, FIXTURE_OUTER, FIXTURE_POCKET,
-    FIXTURE_WALL_TOP, FLOOR_Z, GRIPPER_GAP_EMPTY, GRIPPER_GAP_OPEN, NEST_INNER, NEST_LINE,
-    PART_EDGE, TABLE_CENTER, TABLE_SIZE, TAG_SIZE,
+    CARRIER_TOP, FINGER, FIXTURE_CENTER, FLOOR_Z, NEST_LINE, PART_EDGE, TABLE_CENTER,
+    TABLE_SIZE, TAG_SIZE,
 )
+
+METALS = f"{partsets.ASSET_ROOT}/NVIDIA/Materials/Base/Metals"
+# Workshop-style HDR environments from the same asset server. Metal parts only look like
+# metal with real surroundings to reflect; a plain grey sky made steel look flat and dark.
+WORKSHOP_HDRS = tuple(f"{partsets.ASSET_ROOT}/NVIDIA/Assets/Skies/Indoor/{n}" for n in (
+    "autoshop_01_4k.hdr", "ZetoCG_com_WarehouseInterior2b.hdr", "old_bus_depot_4k.hdr",
+    "carpentry_shop_01_4k.hdr"))
 
 
 # ---------------------------------------------------------------------------------------
@@ -108,6 +118,24 @@ def _set_matrix(prim: Usd.Prim, R, t) -> None:
     xf.AddTransformOp().Set(Gf.Matrix4d(*[v for row in rows for v in row]))
 
 
+def _mdl_material(stage: Usd.Stage, path: str, mdl_name: str) -> UsdShade.Material:
+    """An NVIDIA MDL material (steel, rust, ...) referenced from the asset server."""
+    import omni.kit.commands
+    omni.kit.commands.execute("CreateMdlMaterialPrimCommand", mtl_url=f"{METALS}/{mdl_name}.mdl",
+                              mtl_name=mdl_name, mtl_path=path)
+    return UsdShade.Material(stage.GetPrimAtPath(path))
+
+
+def _mesh(stage, path, pts, counts, idx, mat) -> UsdGeom.Mesh:
+    m = UsdGeom.Mesh.Define(stage, path)
+    m.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*q) for q in pts]))
+    m.CreateFaceVertexCountsAttr(counts)
+    m.CreateFaceVertexIndicesAttr(idx)
+    m.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    _bind(m.GetPrim(), mat)
+    return m
+
+
 def _visible(prim: Usd.Prim, on: bool) -> None:
     img = UsdGeom.Imageable(prim)
     img.MakeVisible() if on else img.MakeInvisible()
@@ -125,9 +153,11 @@ class Views:
 class Cell:
     """Builds the stage once; `apply()` re-poses it for one SceneSpec."""
 
-    def __init__(self, stage: Usd.Stage, tag_texture: Path, resolution=(1024, 768)):
+    def __init__(self, stage: Usd.Stage, tag_texture: Path, resolution=(1024, 768),
+                 part_set: str = "cube"):
         self.stage = stage
         self.resolution = resolution
+        self.ps = ps = partsets.get(part_set)
         UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
         UsdGeom.SetStageMetersPerUnit(stage, 1.0)
         UsdGeom.Xform.Define(stage, "/World")
@@ -153,6 +183,9 @@ class Cell:
         # A crack shows as a dark line: the gap is in shadow and the broken edges are rough.
         self.m_crack = _material(s, "/World/Looks/Crack", (0.05, 0.05, 0.055), 0.95, 0.0)
         self.m_print = _material(s, "/World/Looks/NestPrint", (0.16, 0.17, 0.19), 0.8, 0.0)
+        if ps.material == "steel":
+            self.m_steel = _mdl_material(s, "/World/Looks/Steel", "Steel_Stainless")
+            self.m_rust = _mdl_material(s, "/World/Looks/Rust", "RustedMetal")
 
         # Floor and table.
         _box(s, "/World/Floor", (6.0, 6.0, 0.02), (0.4, 0.0, FLOOR_Z - 0.01), self.m_floor)
@@ -171,27 +204,34 @@ class Cell:
         # A printed nest outline around the slot: what a real carrier has, and what makes
         # "displaced" visible at all. Without it the only cue was distance to the tag.
         sx, sy = CARRIER_SLOT
-        o = NEST_INNER / 2 + NEST_LINE / 2
-        ln = NEST_INNER + 2 * NEST_LINE
+        nest = ps.nest_inner
+        o = nest / 2 + NEST_LINE / 2
+        ln = nest + 2 * NEST_LINE
         zt = CARRIER_TOP + 0.0002
         for name, size, ctr in (("N", (ln, NEST_LINE, 0.0004), (sx, sy + o, zt)),
                                 ("S", (ln, NEST_LINE, 0.0004), (sx, sy - o, zt)),
-                                ("E", (NEST_LINE, NEST_INNER, 0.0004), (sx + o, sy, zt)),
-                                ("W", (NEST_LINE, NEST_INNER, 0.0004), (sx - o, sy, zt))):
+                                ("E", (NEST_LINE, nest, 0.0004), (sx + o, sy, zt)),
+                                ("W", (NEST_LINE, nest, 0.0004), (sx - o, sy, zt))):
             _box(s, f"/World/CarrierNest/{name}", size, ctr, self.m_print)
 
-        # Fixture: a base plate plus four walls forming a square pocket.
+        # Fixture: a base plate plus walls forming the pocket — four boxes for the cube's
+        # square pocket, one counterbore mesh for the fastener's round one.
         fx, fy = FIXTURE_CENTER
-        _box(s, "/World/Fixture/Base", (FIXTURE_OUTER, FIXTURE_OUTER, FIXTURE_BASE_TOP),
-             (fx, fy, FIXTURE_BASE_TOP / 2), self.m_fixture)
-        wall_h = FIXTURE_WALL_TOP - FIXTURE_BASE_TOP
-        wall_t = (FIXTURE_OUTER - FIXTURE_POCKET) / 2
-        wz = FIXTURE_BASE_TOP + wall_h / 2
-        off = FIXTURE_POCKET / 2 + wall_t / 2
-        _box(s, "/World/Fixture/WallN", (FIXTURE_OUTER, wall_t, wall_h), (fx, fy + off, wz), self.m_fixture)
-        _box(s, "/World/Fixture/WallS", (FIXTURE_OUTER, wall_t, wall_h), (fx, fy - off, wz), self.m_fixture)
-        _box(s, "/World/Fixture/WallE", (wall_t, FIXTURE_POCKET, wall_h), (fx + off, fy, wz), self.m_fixture)
-        _box(s, "/World/Fixture/WallW", (wall_t, FIXTURE_POCKET, wall_h), (fx - off, fy, wz), self.m_fixture)
+        outer, base_top, wall_top, pocket = ps.fixture_outer, ps.fixture_base_top, ps.fixture_wall_top, ps.pocket_size
+        _box(s, "/World/Fixture/Base", (outer, outer, base_top), (fx, fy, base_top / 2), self.m_fixture)
+        if ps.pocket_shape == "square":
+            wall_h = wall_top - base_top
+            wall_t = (outer - pocket) / 2
+            wz = base_top + wall_h / 2
+            off = pocket / 2 + wall_t / 2
+            _box(s, "/World/Fixture/WallN", (outer, wall_t, wall_h), (fx, fy + off, wz), self.m_fixture)
+            _box(s, "/World/Fixture/WallS", (outer, wall_t, wall_h), (fx, fy - off, wz), self.m_fixture)
+            _box(s, "/World/Fixture/WallE", (wall_t, pocket, wall_h), (fx + off, fy, wz), self.m_fixture)
+            _box(s, "/World/Fixture/WallW", (wall_t, pocket, wall_h), (fx - off, fy, wz), self.m_fixture)
+        else:
+            pts, counts, idx = block_with_round_hole(outer, pocket / 2, base_top, wall_top)
+            ring = _mesh(s, "/World/Fixture/Counterbore", pts, counts, idx, self.m_fixture)
+            UsdGeom.XformCommonAPI(ring).SetTranslate(Gf.Vec3d(fx, fy, 0.0))
 
         # Reject bin: an open box.
         bx, by = BIN_CENTER
@@ -223,6 +263,8 @@ class Cell:
         _bind(mesh.GetPrim(), self.m_tag)
 
     def _build_parts(self):
+        if self.ps.name != "cube":
+            return self._build_referenced_parts()
         s = self.stage
         self.parts = {}
 
@@ -282,26 +324,73 @@ class Cell:
         for prim in self.parts.values():
             _visible(prim, False)
 
+    def _build_referenced_parts(self):
+        """Fastener set: NVIDIA's own meshes referenced by URL (never copied into the repo),
+        each in a holder whose origin is the part's bounding-box centre — like the cubes —
+        so layout.py places every part the same way."""
+        s, ps = self.stage, self.ps
+        self.parts = {}
+
+        def ref(name, pd, material):
+            holder = UsdGeom.Xform.Define(s, f"/World/Parts/{name}").GetPrim()
+            asset = UsdGeom.Xform.Define(s, f"/World/Parts/{name}/asset")
+            # Reference the physics-free visual mesh into a CHILD and pose the parent: a
+            # reference brings the asset's own transform ops onto the prim holding it.
+            asset.GetPrim().GetReferences().AddReference(pd.usd_url, pd.usd_prim)
+            c = pd.usd_center
+            UsdGeom.XformCommonAPI(asset).SetTranslate(Gf.Vec3d(-c[0], -c[1], -c[2]))
+            # Bind on the referenced mesh, not the holder: a "stronger than descendants"
+            # binding on the holder also overrode the crack ribbon (a sibling of the asset),
+            # and the first cracked nuts rendered with no crack at all.
+            UsdShade.MaterialBindingAPI.Apply(asset.GetPrim()).Bind(material, UsdShade.Tokens.strongerThanDescendants)
+            return holder
+
+        self.parts[("correct", None)] = ref("correct", ps.correct, self.m_steel)
+        for pd in ps.wrong:
+            self.parts[("wrong", pd.name)] = ref(f"wrong_{pd.name}", pd, self.m_steel)
+        self.parts[("defective", "rust")] = ref("defect_rust", ps.correct, self.m_rust)
+        self.parts[("defective", "chip")] = ref("defect_chip", ps.correct, self.m_steel)
+        self.parts[("defective", "crack")] = ref("defect_crack", ps.correct, self.m_steel)
+        # The crack is a thin dark ribbon on a side flat, a child of the cracked part.
+        self.crack_mesh = UsdGeom.Mesh.Define(s, "/World/Parts/defect_crack/crack")
+        self.crack_mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+        UsdShade.MaterialBindingAPI.Apply(self.crack_mesh.GetPrim()).Bind(
+            self.m_crack, UsdShade.Tokens.strongerThanDescendants)
+        self._chip_points = None  # the nut's original mesh points, read on first use
+        for prim in self.parts.values():
+            _visible(prim, False)
+
+    def _chip_mesh(self) -> UsdGeom.Mesh:
+        """The chipped nut's visual mesh (inside the referenced asset)."""
+        root = self.stage.GetPrimAtPath("/World/Parts/defect_chip/asset")
+        for p in Usd.PrimRange(root):
+            if p.IsA(UsdGeom.Mesh):
+                return UsdGeom.Mesh(p)
+        raise RuntimeError("no mesh found under the chipped part's reference")
+
     def _build_gripper(self):
         s = self.stage
+        k = self.ps.gripper_scale  # 1.0 for the 50 mm cube, 0.5 for a 24 mm nut
         self.gripper = UsdGeom.Xform.Define(s, "/World/Gripper").GetPrim()
         # Origin = the grasp point between the finger pads.
-        fx, fy, fz = FINGER
-        self.finger_l = _box(s, "/World/Gripper/FingerL", FINGER, (0, 0, 0), self.m_grip)
-        self.finger_r = _box(s, "/World/Gripper/FingerR", FINGER, (0, 0, 0), self.m_grip)
-        palm_z0 = fz / 2 + 0.008
-        _box(s, "/World/Gripper/Palm", (0.045, 0.11, 0.035), (0, 0, palm_z0 + 0.0175), self.m_grip)
+        self.finger = finger = tuple(v * k for v in FINGER)
+        fx, fy, fz = finger
+        self.finger_l = _box(s, "/World/Gripper/FingerL", finger, (0, 0, 0), self.m_grip)
+        self.finger_r = _box(s, "/World/Gripper/FingerR", finger, (0, 0, 0), self.m_grip)
+        palm_z0 = fz / 2 + 0.008 * k
+        _box(s, "/World/Gripper/Palm", (0.045 * k, 0.11 * k, 0.035 * k), (0, 0, palm_z0 + 0.0175 * k), self.m_grip)
         wrist = UsdGeom.Cylinder.Define(s, "/World/Gripper/Wrist")
-        wrist.CreateRadiusAttr(0.032)
-        wrist.CreateHeightAttr(0.12)  # a short flange; a tall link read as a pillar on the table
-        UsdGeom.XformCommonAPI(wrist).SetTranslate(Gf.Vec3d(0, 0, palm_z0 + 0.035 + 0.06))
+        wrist.CreateRadiusAttr(0.032 * k)
+        wrist.CreateHeightAttr(0.12 * k)  # a short flange; a tall link read as a pillar on the table
+        UsdGeom.XformCommonAPI(wrist).SetTranslate(Gf.Vec3d(0, 0, palm_z0 + (0.035 + 0.06) * k))
         _bind(wrist.GetPrim(), self.m_wrist)
 
     def _set_gap(self, gap: float):
-        fx, fy, fz = FINGER
+        fx, fy, fz = self.finger
         y = gap / 2 + fy / 2
-        UsdGeom.XformCommonAPI(self.finger_l).SetTranslate(Gf.Vec3d(0, +y, fz / 2 - 0.02))
-        UsdGeom.XformCommonAPI(self.finger_r).SetTranslate(Gf.Vec3d(0, -y, fz / 2 - 0.02))
+        z = fz / 2 - 0.02 * self.ps.gripper_scale
+        UsdGeom.XformCommonAPI(self.finger_l).SetTranslate(Gf.Vec3d(0, +y, z))
+        UsdGeom.XformCommonAPI(self.finger_r).SetTranslate(Gf.Vec3d(0, -y, z))
 
     def _build_lights(self):
         s = self.stage
@@ -313,6 +402,8 @@ class Cell:
         for light in (self.dome, self.sun):
             light.CreateEnableColorTemperatureAttr(True)
             light.CreateColorTemperatureAttr(5500.0)
+        if self.ps.material == "steel":
+            self.dome.CreateTextureFileAttr(WORKSHOP_HDRS[0])
 
     def _camera(self, path, focal_mm, w, h) -> UsdGeom.Camera:
         cam = UsdGeom.Camera.Define(self.stage, path)
@@ -349,7 +440,9 @@ class Cell:
         for k, prim in self.parts.items():
             _visible(prim, k == key)
         part = self.parts[key]
-        if key == ("defective", "chip"):
+        if self.ps.name != "cube":
+            self._apply_fastener_defect(key, spec)
+        elif key == ("defective", "chip"):
             pts, counts, idx = chipped_cube_mesh(PART_EDGE, spec.chip_mm / 1000.0, spec.chip_corner)
             self.defect_mesh.GetPointsAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*p) for p in pts]))
             self.defect_mesh.GetFaceVertexCountsAttr().Set(counts)
@@ -367,11 +460,11 @@ class Cell:
         g_xyz = (ax, ay, az + spec.gripper_height_m)
         _pose(self.gripper, g_xyz, (0, 0, 0))
         if not spec.gripper_closed:
-            self._set_gap(GRIPPER_GAP_OPEN)
+            self._set_gap(self.ps.gap_open)
         elif spec.gripper_holding:
-            self._set_gap(PART_EDGE)
+            self._set_gap(self.ps.gap_holding)
         else:
-            self._set_gap(GRIPPER_GAP_EMPTY)
+            self._set_gap(self.ps.gap_empty)
 
         if spec.part_location == "gripper":
             p_xyz, p_rot = g_xyz, L.rot_z(0.0)
@@ -387,6 +480,8 @@ class Cell:
         for light in (self.dome, self.sun):
             light.GetColorTemperatureAttr().Set(dr["color_temp_k"])
         _pose(self.sun.GetPrim(), (0, 0, 0), (dr["key_elevation_deg"] - 90.0, 0, dr["key_azimuth_deg"]))
+        if "hdr" in dr:
+            self.dome.GetTextureFileAttr().Set(dr["hdr"])
 
         # Cameras: a fixed-ish overview, and a close-up on this checkpoint's region.
         j = dr["cam_jitter"]
@@ -395,7 +490,9 @@ class Cell:
         self._look_at(self.cam_overview, ov_eye, ov_target)
 
         roi = self._roi(spec, g_xyz, p_xyz)
-        cu_eye = (roi[0] + 0.34 + j[0] * 0.5, roi[1] - 0.12 + j[1] * 0.5, roi[2] + 0.28 + j[2] * 0.5)
+        handling = spec.checkpoint in ("CP_POST_LIFT", "CP_POST_TRANSPORT")
+        cx_, cy_, cz_ = (self.ps.closeup_offset_handling or self.ps.closeup_offset) if handling else self.ps.closeup_offset
+        cu_eye = (roi[0] + cx_ + j[0] * 0.5, roi[1] + cy_ + j[1] * 0.5, roi[2] + cz_ + j[2] * 0.5)
         self._look_at(self.cam_closeup, cu_eye, roi)
 
         return {
@@ -407,12 +504,39 @@ class Cell:
             "closeup_target": [round(v, 4) for v in roi],
         }
 
-    @staticmethod
-    def _roi(spec, g_xyz, p_xyz):
+    def _roi(self, spec, g_xyz, p_xyz):
+        k = self.ps.gripper_scale  # the same scale as the parts: 1 for cubes, 0.5 for nuts
         cp = spec.checkpoint
         if cp == "CP_PRE_GRASP":
-            return (CARRIER_SLOT[0], CARRIER_SLOT[1], CARRIER_TOP + 0.02)
+            return (CARRIER_SLOT[0], CARRIER_SLOT[1], CARRIER_TOP + 0.02 * k)
         if cp == "CP_POST_PLACE":
-            return (FIXTURE_CENTER[0], FIXTURE_CENTER[1], FIXTURE_BASE_TOP + 0.02)
+            return (FIXTURE_CENTER[0], FIXTURE_CENTER[1], self.ps.fixture_base_top + 0.02 * k)
         # Lift/transport: frame the gripper and whatever is (or isn't) under it.
-        return (g_xyz[0], g_xyz[1], g_xyz[2] - 0.04)
+        return (g_xyz[0], g_xyz[1], g_xyz[2] - 0.04 * k)
+
+    def _apply_fastener_defect(self, key, spec):
+        """Chip: cut a hex corner of the real nut mesh. Crack: lay a ribbon on the flat
+        that faces the close-up camera. Rust: nothing to do here; it's the material."""
+        ps = self.ps
+        if key == ("defective", "chip"):
+            mesh = self._chip_mesh()
+            if self._chip_points is None:
+                self._chip_points = [tuple(v) for v in mesh.GetPointsAttr().Get()]
+            ax, ay, az = ps.correct.dims
+            top_z = ps.correct.usd_center[2] + az / 2  # in the mesh's own frame
+            pts, _moved = hex_corner_cut(self._chip_points, spec.chip_corner, ay, top_z,
+                                         spec.chip_mm / 1000.0)
+            mesh.GetPointsAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*q) for q in pts]))
+        elif key == ("defective", "crack"):
+            ax, ay, az = ps.correct.dims
+            side = ay / 2  # a regular hexagon's side equals its corner radius
+            flat = 300.0   # the flat facing the close-up camera (+x, -y)
+            pts2d, counts, idx = crack_ribbon(spec.crack_mm / 1000.0, spec.crack_angle_deg, side / 2,
+                                              spec.seed, width=0.0004, segments=6, margin=0.0012,
+                                              half_height=az / 2, wobble=0.0005)
+            centre, u, v, n = hex_flat_frame(flat, ax, 0.0)
+            pts = place_on_face(pts2d, centre, u, v)
+            self.crack_mesh.GetPointsAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*q) for q in pts]))
+            self.crack_mesh.GetFaceVertexCountsAttr().Set(counts)
+            self.crack_mesh.GetFaceVertexIndicesAttr().Set(idx)
+            self.crack_mesh.CreateNormalsAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*n)] * len(pts)))

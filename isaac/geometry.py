@@ -179,3 +179,36 @@ def place_on_face(points2d, centre, u, v):
     """Map (x, y, 0) points of a flat 2-D shape onto a face given by its frame."""
     return [(centre[0] + x * u[0] + y * v[0], centre[1] + x * u[1] + y * v[1], centre[2] + x * u[2] + y * v[2])
             for x, y, _ in points2d]
+
+
+def block_with_round_hole(outer: float, radius: float, z0: float, z1: float, segments: int = 64):
+    """A square block of side `outer` from z0 to z1 with a vertical round hole of
+    `radius` through it, centred on the origin: the counterbore wall of the fastener
+    fixture. Top face, outer walls and the bore wall; no bottom (it sits on a base plate).
+
+    The top face is triangulated by pairing each bore point with the point where the same
+    ray from the centre meets the square, so the mesh has no gaps for any segment count.
+    Returns (points, face_vertex_counts, face_vertex_indices), wound counter-clockwise
+    seen from outside the material.
+    """
+    import math
+    if not 0 < radius < outer / 2:
+        raise ValueError("the hole must fit inside the block")
+    half = outer / 2
+    pts: list[tuple[float, float, float]] = []
+    for k in range(segments):
+        a = 2 * math.pi * k / segments
+        c, s = math.cos(a), math.sin(a)
+        t = half / max(abs(c), abs(s))  # ray from the centre to the square
+        pts += [(radius * c, radius * s, z1), (t * c, t * s, z1),  # bore top, square top
+                (radius * c, radius * s, z0), (t * c, t * s, z0)]  # bore bottom, square bottom
+    counts, idx = [], []
+    for k in range(segments):
+        a, b = 4 * k, 4 * ((k + 1) % segments)
+        bore_top, sq_top, bore_bot, sq_bot = a, a + 1, a + 2, a + 3
+        nbore_top, nsq_top, nbore_bot, nsq_bot = b, b + 1, b + 2, b + 3
+        idx += [bore_top, sq_top, nsq_top, nbore_top]  # top face, facing +z
+        idx += [sq_bot, nsq_bot, nsq_top, sq_top]  # outer wall, facing outward
+        idx += [bore_bot, nbore_bot, nbore_top, bore_top][::-1]  # bore wall, facing the hole
+        counts += [4, 4, 4]
+    return pts, counts, idx

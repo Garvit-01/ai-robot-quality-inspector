@@ -60,7 +60,8 @@ class PartSet:
     gap_holding: float  # what the fingers read when they hold the correct part
     gap_empty: float
     gripper_scale: float  # stand-in gripper geometry scale (1.0 = sized for the 50 mm cube)
-    # Close-up camera offset from the region of interest
+    # Close-up camera offset from the region of interest, for inspecting the part
+    # (before grasp, after place)...
     closeup_offset: tuple[float, float, float]
     # Plain-language descriptions for the verifier prompt (config part_reference)
     describe: dict = field(default_factory=dict)
@@ -68,6 +69,9 @@ class PartSet:
     # How far a correctly seated part may sit off centre: less than its clearance in the
     # pocket, or a "clean" seat would rest on the rim.
     seated_jitter_mm: float = 1.5
+    # ...and for watching the gripper (after lift, after transport), which needs room for
+    # the fingers AND whatever is, or isn't, below them. None = same as closeup_offset.
+    closeup_offset_handling: tuple[float, float, float] | None = None
 
 
 CUBE = PartSet(
@@ -107,9 +111,12 @@ FASTENER = PartSet(
     fixture_base_top=0.012, fixture_wall_top=0.020,
     nest_inner=0.032,
     gap_open=0.045, gap_holding=0.024, gap_empty=0.004, gripper_scale=0.5,
-    closeup_offset=(0.17, -0.06, 0.14),
+    # Half the cube's distance was still too far: the nut came out ~60 px wide, so a 4 mm
+    # chip was a handful of pixels. An inspection camera for M16 parts sits this close.
+    closeup_offset=(0.085, -0.03, 0.07),
     # A 27.7 mm across-corners nut in a 30 mm counterbore has 1.15 mm of clearance.
     seated_jitter_mm=0.8,
+    closeup_offset_handling=(0.17, -0.06, 0.14),
     describe={
         "correct": "an M16 hex nut: bright steel, 24 mm across the flats, threaded hole, undamaged",
         "wrong": "any part that is not an M16 nut — a bolt, or a nut of a different size",
