@@ -1,0 +1,13 @@
+# Python packages for everything EXCEPT rendering (calling models, scoring, reports, tests).
+# Rendering (isaac/) runs inside Isaac Sim's own Python (~/isaacsim/python.sh) and needs an
+# NVIDIA RTX GPU; the fine-tune (finetune/) installs its own packages on the GPU VM
+# (finetune/setup_vm.sh).
+#
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+openai>=1.40
+pydantic>=2.7
+PyYAML>=6.0
+pillow>=10.0
+numpy>=1.26
+matplotlib>=3.8
+pytest>=8.0
