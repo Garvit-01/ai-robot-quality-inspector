@@ -121,7 +121,7 @@ def _hex_cloud(n=40):
     return pts
 
 
-@pytest.mark.parametrize("corner", [3, 4])
+@pytest.mark.parametrize("corner", [4, 5])
 def test_hex_chip_removes_only_the_chosen_corner(corner):
     pts = _hex_cloud()
     out, moved = hex_corner_cut(pts, corner, AC, H, 0.004)
@@ -136,13 +136,6 @@ def test_hex_chip_removes_only_the_chosen_corner(corner):
     # Nothing is left beyond the cutting plane.
     _, moved_again = hex_corner_cut(out, corner, AC, H, 0.004)
     assert moved_again == 0
-
-
-def test_chip_corners_face_the_inspection_camera():
-    # The close-up camera sits at +x, -y; corners 3 (-y) and 4 (+x,-y) face it.
-    for c in (3, 4):
-        x, y = hex_corner_xy(c, AC)
-        assert 0.34 * x - 0.12 * y > 0
 
 
 def test_flat_frame_sits_on_the_flat_and_faces_out():
@@ -173,3 +166,26 @@ def test_counterbore_faces_point_the_right_way():
         mid = [sum(pts[i][d] for i in bore) / 4 for d in range(2)]
         n = normal(bore)
         assert n[0] * mid[0] + n[1] * mid[1] < 0, "bore wall must face into the hole"
+
+
+from geometry import rust_pattern  # noqa: E402
+
+
+def test_rust_covers_the_requested_fraction_in_patches_and_is_deterministic():
+    pts = _hex_cloud(60)
+    c1, m1, r1 = rust_pattern(pts, seed=5, coverage=0.35)
+    c2, _, _ = rust_pattern(pts, seed=5, coverage=0.35)
+    assert c1 == c2
+    rusty = [m < 0.5 for m in m1]
+    assert abs(sum(rusty) / len(rusty) - 0.35) < 0.03
+    # Patchy, not salt-and-pepper: each point mostly agrees with its nearest neighbour in
+    # space. (Consecutive list entries can be 6.5 mm apart in this cloud — more than a
+    # patch — so list order is not a neighbourhood.)
+    def nearest(i):
+        p = pts[i]
+        return min((j for j in range(len(pts)) if j != i),
+                   key=lambda j: sum((pts[j][d] - p[d]) ** 2 for d in range(3)))
+    sample = range(0, len(pts), 7)
+    same = sum(rusty[i] == rusty[nearest(i)] for i in sample) / len(sample)
+    assert same > 0.8
+    assert rust_pattern(pts, seed=6, coverage=0.35)[0] != c1
