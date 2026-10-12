@@ -214,10 +214,16 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--config", type=Path, default=None,
+                    help="alternative config file, e.g. an older prompt version for an A/B run")
     args = ap.parse_args()
 
     load_dotenv()
-    cfg = load_config()
+    if args.config:
+        import yaml
+        cfg = yaml.safe_load(args.config.read_text())
+    else:
+        cfg = load_config()
     client = client_for(cfg["verifier"])
     model = args.model or require_env(cfg["verifier"]["model_id_env"])
     views = [v.strip() for v in args.views.split(",") if v.strip()]

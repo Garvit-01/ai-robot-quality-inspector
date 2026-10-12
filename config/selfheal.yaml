@@ -19,11 +19,9 @@ verifier:
   jpeg_quality: 85
   # Which views each checkpoint sends. Crops matter more than resolution for
   # small tilts/offsets — this is the main knob for the M2 go/no-go.
-  views:
-    CP_PRE_GRASP:        [overhead, crop_carrier]
-    CP_POST_LIFT:        [overhead, crop_gripper]
-    CP_POST_TRANSPORT:   [overhead]
-    CP_POST_PLACE:       [overhead, crop_fixture]
+  # Rendered views per scene (isaac/stage_scene.py): an overview of the cell and a
+  # close-up framed on the checkpoint's region. The benchmark sends both by default.
+  views: [overview, closeup]
 
 planner:
   base_url_env: PLANNER_BASE_URL
@@ -55,7 +53,13 @@ prompts:
   #   + the AprilTag as a 50 mm size reference
   #   + per-checkpoint checklists; the transport rule that an empty gripper means dropped
   #   - "centred on the carrier", which was simply wrong: the part's slot is off-centre
-  version: v1
+  # v2 (tried, dropped): pointed position checks at the new nest outline and re-described
+  #   damage. 53.3% on dev vs v1's 60.0% (identical re-runs changed 0-3 answers, so this
+  #   was a real if small difference on these scenes).
+  # v3 = v1 + a definition of location_hint, which was scored but never defined.
+  #   Dev: 61.7% failure type, 88.3% location — best of v1/v2/v3. Prompt tuning stops here:
+  #   gains had flattened at ~55-62%, and the remaining misses are perception, not wording.
+  version: v3
 
   system: |
     You are a quality and process verifier for a robot work cell. You look at camera
@@ -92,6 +96,9 @@ prompts:
     location_hint must be exactly one of:
       gripper, carrier, table_in_reach, table_out_of_reach, off_table, fixture,
       reject_bin, unknown
+    location_hint means where the part is RIGHT NOW: gripper if it is held, carrier or
+    fixture if it is sitting there, table_in_reach if it is lying on the table, off_table
+    if it fell off the table and cannot be seen. It is not where the part should go next.
 
   checkpoints:
     CP_PRE_GRASP: |
