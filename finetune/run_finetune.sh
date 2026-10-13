@@ -31,7 +31,7 @@
 # so a stuck job can't run up a bill. Delete the VM when finished.
 set -euo pipefail
 
-VM_IP="${VM_IP:-89.169.114.255}"            # the VM's public IP
+VM_IP="${VM_IP:-}"                       # the VM's public IP: required, e.g. VM_IP=1.2.3.4 ./finetune/run_finetune.sh push
 VM_USER="${VM_USER:-ubuntu}"
 VM_DIR="${VM_DIR:-selfheal}"              # working directory on the VM (under ~)
 SHUTDOWN_MIN="${SHUTDOWN_MIN:-240}"       # safety cap: VM powers off after this many minutes
@@ -193,6 +193,13 @@ step_nemotron() {
   $PY finetune/score_generations.py "$DATA/eval.jsonl" "$DATA/gen/gen_nemotron_vl.jsonl" \
       --scene-dir "$EVAL" --model "nvidia/Nemotron-Nano-12B-v2-VL (zero-shot)" --out runs/bench/feval_v1__nemotron_vl
 }
+
+# Every step except `data` talks to the VM. Its address changes whenever it is recreated or
+# restarted, so there is deliberately no default.
+if [ -n "${1:-}" ] && [ "$1" != data ] && [ -z "$VM_IP" ]; then
+  echo "Set the VM's public IP first, e.g.:  VM_IP=1.2.3.4 ./finetune/run_finetune.sh $1" >&2
+  exit 2
+fi
 
 case "${1:-}" in
   all) step_data; step_push; step_setup; step_baseline; step_train; mkdir -p "$DATA/gen"; step_dev; step_eval; step_pull; step_score ;;
