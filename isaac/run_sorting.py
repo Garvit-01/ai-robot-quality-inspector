@@ -37,11 +37,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(REPO))  # selfheal.sorting: pure Python, shared with eval/
 
 import faults  # noqa: E402
 import layout as L  # noqa: E402
 import partsets  # noqa: E402
 import trays  # noqa: E402
+from selfheal.sorting import decide  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--trays", default="20000", help="comma-separated seeds, or a split name: dev | eval")
@@ -328,12 +330,6 @@ def oracle(tp: trays.TrayPart, view: str) -> dict:
     return {"failure_type": tp.expected(view), "raw": "oracle", "latency_ms": 0}
 
 
-def decide(top: str, under: str) -> str:
-    """Lookup-table policy (D), which every Nemotron size matched on 180/180 scenes: reject
-    anything either view calls wrong or damaged; an unclear view also stops it going on."""
-    return "reject" if {top, under} & {"wrong_part", "defective_part", "unclear"} else "accept"
-
-
 # --- main -------------------------------------------------------------------------------
 def main() -> int:
     seeds = list(trays.SPLITS[args.trays]) if args.trays in trays.SPLITS else [int(s) for s in args.trays.split(",")]
@@ -395,7 +391,7 @@ def main() -> int:
             else:
                 vt = ask(system, top_q, top_imgs)
                 vu = ask(system, under_q, under_imgs)
-            action = decide(vt["failure_type"], vu["failure_type"])
+            action = decide(vt["failure_type"], vu["failure_type"])  # the robot acts on 'ours'
             if action == "accept":
                 arm.place(RACK_SLOTS[rack_i % len(RACK_SLOTS)], part, PLATE_TOP)
                 rack_i += 1
