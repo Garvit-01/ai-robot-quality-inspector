@@ -6,9 +6,11 @@ A robot work cell that understands *what* went wrong, not just *that* something 
 and a measurement of whether a small fine-tuned vision model does that job better than a
 large zero-shot one.
 
-> **Status: in development (started Oct 10, 2026).** Results sections below are
-> placeholders until the eval harness runs. Nothing in this README will claim a number
-> that is not reproducible from `runs/`.
+> **Headline:** on 120 held-out simulated scenes, NVIDIA **Cosmos-Reason1-7B** fine-tuned on
+> our rendered faults is right **94.2%** of the time (21.7% before fine-tuning, 75.8% for the best
+> untrained frontier model), and with it **0 of 60 bad parts ship**, where today's
+> gripper-sensor-only cell ships all 60. Every number here is reproducible from `runs/`;
+> limitations are stated below.
 
 ---
 
@@ -44,14 +46,15 @@ the hand," because a VLM should not overrule a switch.
 | `CP_POST_PLACE` | Correctly seated in the fixture? |
 
 If a checkpoint fails, **Nemotron** picks exactly one action from a whitelist of five
-skills we wrote and tested. It never moves the robot and never emits a coordinate — it
-supplies a qualitative region, and classical depth-based geometry does the rest.
+(continue, regrasp, reseat, reject to bin, stop and alert). It never moves the robot and never
+emits a coordinate; at most it names a region ("carrier" or "table").
 
 ```
-Sensor ──▶ Verifier (VLM) ──▶ fuse with gripper signal ──▶ Nemotron picks 1 skill
-   ▲                                                              │
-   └──────────── re-verify the same checkpoint ◀── MoveIt2 executes
+Camera ──▶ Verifier (VLM) ──▶ fuse with gripper signal ──▶ Nemotron picks 1 action ──▶ guardrails
 ```
+
+In the benchmark each chosen action is scored against what should have happened. Executing
+the actions with a physics-driven arm is being added (a sorting line in Isaac Sim).
 
 **The guardrails are in code, not in the prompt.** A wrong or defective part can only ever
 go to the reject bin; if the model picks anything else we override it and count the
@@ -70,19 +73,20 @@ factory and lets us run the same evaluation twice:
 
 - **Tier 1** — hosted zero-shot vision model.
 - **Tier 2** — [Cosmos-Reason1-7B](https://huggingface.co/nvidia/Cosmos-Reason1-7B)
-  LoRA fine-tuned on staged faults, trained as a Nebius Serverless Job and served on a
-  Nebius endpoint.
+  LoRA fine-tuned on 1,800 staged faults on a **Nebius AI Cloud** H100 VM (97 minutes), then
+  compressed to 4-bit so it also runs on a 15 GB T4, the kind of GPU a plant could host.
 
-Same held-out eval split for both, so the columns are comparable. We report accuracy,
-p50/p90 latency, and cost per 100 cycles for each.
+Same held-out eval split, same prompt and same scorer for every model, so the columns are
+comparable.
 
 ## How Nebius and NVIDIA models are used
 
 | Component | What | Where it runs |
 |---|---|---|
 | Recovery planner | NVIDIA **Nemotron**, tool calling, temperature 0 | **Nebius Token Factory** |
-| Verifier (Tier 1) | hosted NVIDIA vision model, zero-shot | **Nebius Token Factory** |
-| Verifier (Tier 2) | **Cosmos-Reason1-7B** + our LoRA adapter | trained in a **Nebius AI Cloud Serverless Job**, served on a **Nebius Serverless Endpoint** |
+| Verifier (Tier 1) | Gemma 3 27B, zero-shot (the baseline we built the pipeline on) | **Nebius Token Factory** |
+| Verifier (Tier 2) | NVIDIA **Cosmos-Reason1-7B** + our LoRA adapter | trained and evaluated on a **Nebius AI Cloud** VM (1x H100); runs 4-bit on a local T4 |
+| Comparison verifiers | every per-token vision model on Token Factory, plus NVIDIA Nemotron-Nano-12B-v2-VL | **Nebius Token Factory**; Nemotron-VL on the Nebius VM |
 | Fault-scene rendering | Isaac Sim 5.1.0 | local GPU (Tesla T4) |
 
 Model IDs and base URLs are **never hardcoded** — they resolve from environment variables
@@ -134,8 +138,8 @@ The fine-tune is driven end to end by `finetune/run_finetune.sh`; see `finetune/
 |---|---|---|---|
 | A | no recovery | none | proceeds blindly |
 | B | **industrial baseline** | gripper signal at post-lift and post-transport only | retry pick at original location 2x, then stop |
-| C | **ours** | verifier at all 4 checkpoints + sensor fusion | Nemotron picks one whitelisted skill, max 2 recoveries |
-| D | ablation | same verifier as C | fixed `failure_type → skill` dict, no LLM |
+| C | **ours** | verifier at all 4 checkpoints + sensor fusion | Nemotron picks one whitelisted action, then guardrails |
+| D | ablation | same verifier as C | fixed `failure_type → action` table, no LLM |
 
 Condition D exists to answer the obvious objection: *why an LLM, when a switch statement
 could pick from a five-item menu?* We will report that result honestly **even if D ties C.**
@@ -146,30 +150,58 @@ badly, but **by construction**: a gripper switch cannot perceive identity or ali
 
 ## Results
 
-Pending. The metrics being collected, per condition and per fault type:
+All on the **120 held-out scenes** (seeds 5000-5119): M16 nuts and their faults, never used for
+training or for tuning prompts. 60 of them hold a bad part (wrong size, M16 bolt, chipped,
+cracked, rusty, or seated crooked), 20 are clean, the rest are handling faults (displaced,
+dropped, missed grasp). Same prompt, same two camera views, same parser and scorer for every row.
 
-- Verifier precision and recall, per checkpoint and per failure type
-- Rate at which the planner selects the correct recovery
-- Guardrail overrides, and how often the verifier answered `unclear`
-- False alarms on clean (`F0`) scenes, and unnecessary recoveries
-- Verifier latency, p50 and p90
-- Cost per 100 cycles — tokens x price, plus endpoint hours x rate
+**The verifier: is it right about what's wrong?**
 
-Tier 2 adds the same table for the fine-tuned model alongside the zero-shot one,
-plus accuracy as a function of training-set size.
+| Verifier | Correct | False alarms on clean parts | Faults missed |
+|---|---|---|---|
+| **Cosmos-Reason1-7B + our LoRA** (H100) | **94.2%** | 25% | **0%** |
+| … same, 4-bit on a T4 | 93.3% | 20% | 2% |
+| MiniMax-M3, zero-shot | 75.8% | 5% | 16% |
+| Kimi-K3, zero-shot | 72.5% | 5% | 16% |
+| Qwen3.8-27B, zero-shot | 66.7% | 0% | 22% |
+| Gemma 3 27B, zero-shot | 48.3% | 0% | 52% |
+| NVIDIA Nemotron-Nano-12B-v2-VL, zero-shot | 38.3% | 55% | 38% |
+| NVIDIA Cosmos-Reason1-7B, zero-shot | 21.7% | 50% | 30% |
+
+Untrained models cannot tell an M16 nut from an M12 or M20, and miss 4 mm chips; a second
+prompt version aimed at exactly those changed nothing (0/6 wrong-size nuts, 0/4 chips on dev),
+so it is a perception gap, not a wording one. Fine-tuning on
+1,800 rendered scenes (51.5M trainable parameters, 0.6% of the model) closes it.
+
+**The whole loop: how many bad parts reach the fixture?** (60 bad parts in the 120 scenes)
+
+| Condition | Correct decisions | Bad parts shipped |
+|---|---|---|
+| A · no checks | 16.7% | 60 |
+| B · industrial baseline (gripper sensor only) | 21.7% | 60 |
+| C · ours, Gemma as verifier | 48.3% | 44 |
+| **C · ours, fine-tuned Cosmos as verifier** | **95.8%** | **0** |
+
+The cost: 5 of 20 clean nuts were flagged and sent to the bin.
+
+**What didn't help:** the planner. Four Nemotron sizes (Nano 30B, Super 120B, Ultra 550B,
+3.5-Lightning) made the same decision as a fixed lookup table (condition D) on all 180 scenes
+(dev + held-out). The verifier's accuracy is what moves the result; we report that plainly.
 
 ## Limitations
 
 Stated up front because they are the honest frame for every number here.
 
-- **Sim only.** Trained and evaluated entirely in Isaac Sim. Sim-to-real transfer is
-  unproven and this is not evidence of real-world reliability.
-- **No closed-loop physics.** The arm is not yet a physics-driven articulation in Isaac
-  Sim; fault scenes are staged and rendered with ground truth, and recovery skills execute
-  for real on the MoveIt2 stack. We therefore **do not** claim end-to-end cycle success
-  rates, operator calls per 100 cycles, or quality-escape rates — those need the closed
-  loop, which is future work. We report detection and decision quality, which is what this
-  setup can honestly measure.
+- **Sim only.** Trained and evaluated on rendered scenes; train and test come from the same
+  simulator, camera and parts. 94% shows the model can learn the cues untrained models miss;
+  it is not evidence of real-world reliability. A real-photo check on public factory images
+  (MVTec AD) is in progress.
+- **Visible damage only.** The single inspection camera only sees damage on the faces it
+  looks at, so the benchmark only places damage there. Underside damage needs a second camera
+  (in progress).
+- **Snapshots, not a moving robot.** Each scene is one staged moment: the recovery tools are
+  chosen and scored, not executed. We therefore **do not** claim cycle success rates or
+  operator calls per 100 cycles. A physics-driven sorting arm is being added.
 - **Self-reported VLM confidence is poorly calibrated.** It is logged but treated as a soft
   signal only, never as a gate.
 - **Latency.** Verification happens only at checkpoints, never inside motion control.
@@ -188,11 +220,7 @@ period opened on August 26, 2026. It lives in a separate repository,
 launch, and configuration files reused here are noted where they appear.
 
 **New for this hackathon**, all of it after October 10, 2026: the fault staging and
-ground-truth generation, the VLM verifier and its sensor-fusion rules, the recovery planner
-and the code-level guardrails, the four recovery skills, the LoRA fine-tuning pipeline, the
-evaluation harness, and the dashboard. The dated commit history of both repositories
+ground-truth generation (cubes, then NVIDIA's M16 nuts and bolts with chips, cracks and rust),
+the VLM verifier and its sensor-fusion rules, the recovery planner and the code-level
+guardrails, the LoRA fine-tuning pipeline, and the evaluation harness. The dated commit history of both repositories
 reflects this.
-
-Everything else is new work for this hackathon: fault staging and ground truth, the
-verifier and its fusion rules, the recovery planner and guardrails, the recovery skills,
-the fine-tuning pipeline, the eval harness, and the dashboard.
