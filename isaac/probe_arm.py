@@ -126,6 +126,10 @@ def main() -> int:
     world.reset()
 
     ur10.gripper.set_default_state(opened=True)
+    # NVIDIA's example waits for someone to press Play in the window; headless, nobody does,
+    # so the joint drives never run and RMPflow returns NaN targets (seen in the first probe).
+    world.play()
+    world.reset()
     controller = PickPlaceController(name="pick_place", gripper=ur10.gripper, robot_articulation=ur10)
     arm = ur10.get_articulation_controller()
 
@@ -143,18 +147,24 @@ def main() -> int:
     off = args.pick_offset_mm / 1000.0
     log, shots, done_at = [], 0, None
     for step in range(args.steps):
-        world.step(render=args.gui or step % 200 == 0)
+        world.step(render=True)  # as NVIDIA's example; rendering also advances the timeline
         pick = np.array(nut_pos()) + np.array([off, 0.0, 0.0])
         action = controller.forward(picking_position=pick, placing_position=place,
                                     current_joint_positions=ur10.get_joint_positions(),
                                     end_effector_offset=np.array([0, 0, 0.02]))
         arm.apply_action(action)
         if step % 200 == 0:
-            rep.orchestrator.step(rt_subframes=4)
+            # pause_timeline=False: by default a capture PAUSES the simulation, which froze
+            # the arm after the first photo in the first probes (playing False, NaN targets).
+            rep.orchestrator.step(rt_subframes=4, pause_timeline=False)
             Image.fromarray(np.asarray(rgb.get_data())[:, :, :3]).save(args.out / f"step_{step:05d}.png")
             shots += 1
+            jp = np.round(ur10.get_joint_positions(), 3).tolist()
+            tgt = None if action.joint_positions is None else np.round(np.asarray(action.joint_positions, dtype=float), 3).tolist()
             log.append({"step": step, "event": controller.get_current_event(), "nut": nut_pos(),
-                        "gripper_closed": bool(ur10.gripper.is_closed())})
+                        "gripper_closed": bool(ur10.gripper.is_closed()), "joints": jp, "target": tgt,
+                        "playing": world.is_playing()})
+            print(f"[probe]   joints {jp}\n[probe]   target {tgt} playing {world.is_playing()}", flush=True)
             print(f"[probe] step {step} event {controller.get_current_event()} nut {nut_pos()} "
                   f"gripper_closed {ur10.gripper.is_closed()}", flush=True)
         if controller.is_done() and done_at is None:
