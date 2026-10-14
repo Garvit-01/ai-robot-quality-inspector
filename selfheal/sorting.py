@@ -16,6 +16,31 @@ from __future__ import annotations
 
 REJECT_IF = frozenset({"wrong_part", "defective_part", "unclear"})
 
+UNDERSIDE_QUESTION = """Checkpoint: CP_PRE_GRASP. The image is a close-up photo taken from BELOW of
+the part the robot's suction gripper is holding: {part}. You see the part's underside against
+the robot's blue suction cup. Decide only whether the part is wrong or physically damaged.
+- A bolt, or a nut clearly smaller or larger than an M16 nut: wrong_part.
+- A corner cut off, a dark crack line, or brown rust on the underside: defective_part.
+- Otherwise: step_ok true, failure_type none.
+location_hint is gripper in every case.
+
+You are given 1 image(s): image 1 is a close-up of the part's underside.
+
+"""
+
+
+def prompts(cfg: dict) -> tuple[str, str, str]:
+    """(system, top question, underside question) from the verifier config. The top question
+    is exactly the benchmark's pre-grasp prompt for two images (eval/bench_verifier.build_prompt),
+    so the sorting line asks what the model was trained on; the training examples built from
+    the sorting cell (finetune/build_sorting_dataset.py) use these same strings."""
+    p = cfg["prompts"]
+    top = (p["checkpoints"]["CP_PRE_GRASP"].format(**cfg["part_reference"])
+           + "\n\nYou are given 2 image(s): image 1 is an overview of the whole cell; image 2 is a close-up "
+             "of the region this checkpoint is about.\n\n" + p["schema_block"])
+    under = UNDERSIDE_QUESTION.format(part=cfg["part_reference"]["correct"]) + p["schema_block"]
+    return p["system"], top, under
+
 
 def decide(top: str, underside: str = "none") -> str:
     """The lookup table: reject anything either view calls wrong or damaged. An unclear view

@@ -47,3 +47,6 @@ CCH/
 
 # generated reports (rebuild with eval/make_report.py)
 reports/
+
+# deep-research notes (private)
+research_notes/

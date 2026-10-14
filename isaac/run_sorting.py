@@ -43,7 +43,7 @@ import faults  # noqa: E402
 import layout as L  # noqa: E402
 import partsets  # noqa: E402
 import trays  # noqa: E402
-from selfheal.sorting import decide  # noqa: E402
+from selfheal.sorting import decide, prompts  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--trays", default="20000", help="comma-separated seeds, or a split name: dev | eval")
@@ -52,6 +52,8 @@ ap.add_argument("--verifier", default="http://127.0.0.1:8765", help="service URL
 ap.add_argument("--gui", action="store_true")
 ap.add_argument("--move-steps", type=int, default=600, help="step budget per waypoint")
 ap.add_argument("--debug", action="store_true", help="first part only; print every waypoint")
+ap.add_argument("--lighting", choices=("per_part", "fixed"), default="per_part",
+                help="per_part: new randomised lighting + camera nudge for every part, as in the training data")
 args, _ = ap.parse_known_args()
 
 from isaacsim.simulation_app import SimulationApp  # noqa: E402
@@ -101,17 +103,6 @@ SAFE_Z = 0.20
 # feed tray or nest (-y) RMPflow stalled ~15 cm short (a local minimum swinging the base round).
 VIA = np.array([0.40, 0.0, 0.32])
 
-UNDERSIDE_QUESTION = """Checkpoint: CP_PRE_GRASP. The image is a close-up photo taken from BELOW of
-the part the robot's suction gripper is holding: {part}. You see the part's underside against
-the robot's blue suction cup. Decide only whether the part is wrong or physically damaged.
-- A bolt, or a nut clearly smaller or larger than an M16 nut: wrong_part.
-- A corner cut off, a dark crack line, or brown rust on the underside: defective_part.
-- Otherwise: step_ok true, failure_type none.
-location_hint is gripper in every case.
-
-You are given 1 image(s): image 1 is a close-up of the part's underside.
-
-"""
 
 
 # --- scene ------------------------------------------------------------------------------
@@ -214,6 +205,31 @@ class Part:
         self.stage.RemovePrim(self.body.GetPath())
 
 
+def hide_stand_ins(stage, cell):
+    """The dataset cell's staged parts and stand-in gripper/base/fixture; the line has real ones."""
+    for prim in cell.parts.values():
+        _visible(prim, False)
+    for p in ("/World/Gripper", "/World/RobotBase", "/World/Fixture"):
+        _visible(stage.GetPrimAtPath(p), False)
+
+
+def lighting_seed(tray_seed: int, slot: int) -> int:
+    """A clean pre-grasp scene seed per part (F0 at CP_PRE_GRASP is every 24th seed), far from
+    every dataset split, so each part's top photo gets its own domain randomisation."""
+    s = 30000 + 24 * ((tray_seed % 10000) * 6 + slot)
+    sc = faults.make_scene(s, "fastener")
+    assert sc.fault == "F0" and sc.checkpoint == "CP_PRE_GRASP", s
+    return s
+
+
+def relight(stage, cell, seed: int) -> None:
+    """Re-apply the dataset's domain randomisation (lights, HDR, colours, camera nudge) for a
+    clean pre-grasp scene. One fixed lighting setup made the model call every good nut 'too
+    small' on Oct 13; training photos each had their own."""
+    cell.apply(faults.make_scene(seed, "fastener"), make_dr(seed, True, "fastener"))
+    hide_stand_ins(stage, cell)
+
+
 def build(world):
     stage = omni.usd.get_context().get_stage()
     cell = Cell(stage, HERE / "assets" / "tag36h11_id0_1000px.png", (1024, 768), part_set="fastener")
@@ -221,10 +237,7 @@ def build(world):
         app.update()
     seed = 1032  # a clean pre-grasp scene: lights, materials and the cameras aimed at the nest
     cell.apply(faults.make_scene(seed, "fastener"), make_dr(seed, True, "fastener"))
-    for prim in cell.parts.values():
-        _visible(prim, False)
-    for p in ("/World/Gripper", "/World/RobotBase", "/World/Fixture"):
-        _visible(stage.GetPrimAtPath(p), False)
+    hide_stand_ins(stage, cell)
     for p in ("/World/Floor", "/World/Table", "/World/Carrier"):
         collide(stage.GetPrimAtPath(p))
     for p in stage.Traverse():
@@ -245,7 +258,7 @@ def build(world):
     UsdGeom.XformCommonAPI(cam).SetRotate(Gf.Vec3f(180.0, 0.0, 0.0))
     ring = UsdLux.SphereLight.Define(stage, "/World/Lights/UndersideRing")
     ring.CreateRadiusAttr(0.01)
-    ring.CreateIntensityAttr(30000.0)
+    ring.CreateIntensityAttr(0.0)  # on only for underside photos (it lit the nest too, on Oct 13)
     UsdGeom.XformCommonAPI(ring).SetTranslate(Gf.Vec3d(UNDER_CAM[0] + 0.05, UNDER_CAM[1], 0.03))
 
     robot = add_reference_to_stage(usd_path=ROBOT_USD, prim_path="/World/UR10")
@@ -255,7 +268,7 @@ def build(world):
     ur10 = world.scene.add(SingleManipulator(prim_path="/World/UR10", name="ur10",
                                              end_effector_prim_path="/World/UR10/ee_link", gripper=gripper))
     ur10.set_joints_default_state(positions=np.array([-np.pi / 2, -np.pi / 2, -np.pi / 2, -np.pi / 2, np.pi / 2, 0]))
-    return stage, cell, ur10
+    return stage, cell, ur10, ring
 
 
 # --- motion --------------------------------------------------------------------------
@@ -375,7 +388,7 @@ def main() -> int:
     out = args.out
     (out / "images").mkdir(parents=True, exist_ok=True)
     world = World(stage_units_in_meters=1.0, physics_dt=1 / 60, rendering_dt=1 / 60)
-    stage, cell, ur10 = build(world)
+    stage, cell, ur10, ring = build(world)
     world.reset()
     world.play()
     ur10.gripper.set_default_state(opened=True)
@@ -399,11 +412,7 @@ def main() -> int:
             paths.append(p)
         return paths
 
-    system, schema = CFG["prompts"]["system"], CFG["prompts"]["schema_block"]
-    top_q = (CFG["prompts"]["checkpoints"]["CP_PRE_GRASP"].format(**CFG["part_reference"])
-             + "\n\nYou are given 2 image(s): image 1 is an overview of the whole cell; image 2 is a close-up "
-               "of the region this checkpoint is about.\n\n" + schema)
-    under_q = UNDERSIDE_QUESTION.format(part=CFG["part_reference"]["correct"]) + schema
+    system, top_q, under_q = prompts(CFG)  # the same text the training data uses
 
     log = (out / "parts.jsonl").open("a")
     for seed in seeds:
@@ -421,12 +430,18 @@ def main() -> int:
             held1 = arm.pick(part)
             arm.place(NEST, part, L.CARRIER_TOP)
             arm.go(PARK, tol=0.02)
+            if args.lighting == "per_part":
+                rec["lighting_seed"] = lighting_seed(seed, tp.slot)
+                relight(stage, cell, rec["lighting_seed"])
+                arm.step(10, render=True)  # a new background image may still be streaming in
             top_imgs = shoot(["overview", "closeup"], f"{seed}_{tp.slot}_top")
             held2 = arm.pick(part)
             p = part.pos()
             arm.go([UNDER_CAM[0], UNDER_CAM[1], HOVER_Z + part.pd.dims[2] + GRIP_GAP], tol=0.004)
             arm.step(20)
+            ring.GetIntensityAttr().Set(30000.0)
             under_imgs = shoot(["underside"], f"{seed}_{tp.slot}_under")
+            ring.GetIntensityAttr().Set(0.0)
             if args.verifier == "oracle":
                 vt, vu = oracle(tp, "top"), oracle(tp, "underside")
             else:

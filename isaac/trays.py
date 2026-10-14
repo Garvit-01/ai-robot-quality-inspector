@@ -38,7 +38,8 @@ BAD_KINDS = (
     "chip:top", "crack:top", "rust:top",
     "chip:underside", "crack:underside", "rust:underside",
 )
-SPLITS = {"dev": range(20000, 20030), "eval": range(21000, 21040)}
+SPLITS = {"dev": range(20000, 20030), "eval": range(21000, 21040),
+          "train": range(22000, 22200)}  # train: rendered with oracle decisions, for fine-tuning
 UNDERSIDE_CHIP_CORNERS = (0, 1, 2, 3, 4, 5)
 RUST_COVERAGE = (0.25, 0.5)  # same range as faults.py's F5 rust
 # Parts lie nearly aligned on the feed tray, as in a real feeder nest, and the suction cup
