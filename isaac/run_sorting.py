@@ -93,7 +93,9 @@ UNDER_CAM = (0.30, 0.02, 0.004)        # upward-looking camera on the table
 HOVER_Z = 0.13                          # part bottom this high above the table when photographed
 PARK = np.array([0.10, 0.30, 0.45])     # arm out of the inspection views
 EE_DOWN = euler_angles_to_quat(np.array([0, np.pi / 2.0, 0]))  # suction cup pointing down
-EE_OFFSET = 0.02                        # suction tip above the part centre, as NVIDIA's example
+# Suction-cup tip this far above the part's TOP face when gripping. Measured from the top, not
+# the centre: the 10 mm M12 nut was missed when the tip sat 20 mm above its centre (15 mm gap).
+GRIP_GAP = 0.007
 SAFE_Z = 0.20
 # Long moves go through a point above the middle of the table: straight from PARK (+y) to the
 # feed tray or nest (-y) RMPflow stalled ~15 cm short (a local minimum swinging the base round).
@@ -312,7 +314,7 @@ class Arm:
         p = part.pos()
         if not self.go([p[0], p[1], SAFE_Z], label="above part"):
             return False  # never descend from somewhere else: the sweep pushes parts away
-        self.go([p[0], p[1], p[2] + EE_OFFSET], tol=0.003, label="down to part")
+        self.go([p[0], p[1], p[2] + part.pd.dims[2] / 2 + GRIP_GAP], tol=0.003, label="down to part")
         held = self.grip(True)
         self.go([p[0], p[1], SAFE_Z], label="lift")
         if args.debug:
@@ -323,7 +325,7 @@ class Arm:
         """Lower the part until its bottom is `drop_height` above `surface_z`, then release."""
         az = part.pd.dims[2]
         self.go([xy[0], xy[1], SAFE_Z])
-        self.go([xy[0], xy[1], surface_z + drop_height + az / 2 + EE_OFFSET], tol=0.003)
+        self.go([xy[0], xy[1], surface_z + drop_height + az + GRIP_GAP], tol=0.003)
         self.grip(False)
         self.go([xy[0], xy[1], SAFE_Z])
 
@@ -422,7 +424,7 @@ def main() -> int:
             top_imgs = shoot(["overview", "closeup"], f"{seed}_{tp.slot}_top")
             held2 = arm.pick(part)
             p = part.pos()
-            arm.go([UNDER_CAM[0], UNDER_CAM[1], HOVER_Z + part.pd.dims[2] / 2 + EE_OFFSET], tol=0.004)
+            arm.go([UNDER_CAM[0], UNDER_CAM[1], HOVER_Z + part.pd.dims[2] + GRIP_GAP], tol=0.004)
             arm.step(20)
             under_imgs = shoot(["underside"], f"{seed}_{tp.slot}_under")
             if args.verifier == "oracle":
