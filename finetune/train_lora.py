@@ -30,8 +30,9 @@ MODEL = "nvidia/Cosmos-Reason1-7B"
 # (a 4 mm chip is ~35 px wide in the close-up).
 MAX_PIXELS = 1024 * 768
 # LLM projections everywhere except the vision tower, plus the vision blocks' attention and MLP.
-TARGETS = (r"^(?!.*visual).*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$"
-           r"|.*visual\.blocks\.\d+\.(attn\.qkv|attn\.proj|mlp\.gate_proj|mlp\.up_proj|mlp\.down_proj)$")
+LLM_TARGETS = r"^(?!.*visual).*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$"
+VISION_TARGETS = r".*visual\.blocks\.\d+\.(attn\.qkv|attn\.proj|mlp\.gate_proj|mlp\.up_proj|mlp\.down_proj)$"
+TARGETS = f"{LLM_TARGETS}|{VISION_TARGETS}"  # the Oct 12 run: language model AND vision encoder
 
 
 def messages(ex: dict, root: Path, with_answer: bool) -> list[dict]:
@@ -69,6 +70,11 @@ def main() -> None:
     ap.add_argument("--grad-accum", type=int, default=8)
     ap.add_argument("--max-steps", type=int, default=None, help="stop after this many examples (smoke tests)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--freeze-vision", action="store_true",
+                    help="LoRA on the language model only; the vision encoder stays exactly as NVIDIA trained it. "
+                         "Research (Oct 14): updating the vision encoder is the likeliest way to learn one renderer's look")
+    ap.add_argument("--save-every", type=int, default=0,
+                    help="also save the adapter every N examples (0 = only at epoch ends), to pick a checkpoint on dev")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -83,7 +89,8 @@ def main() -> None:
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.enable_input_require_grads()
     model = get_peft_model(model, LoraConfig(r=args.rank, lora_alpha=2 * args.rank, lora_dropout=0.05,
-                                             target_modules=TARGETS, task_type="CAUSAL_LM"))
+                                             target_modules=LLM_TARGETS if args.freeze_vision else TARGETS,
+                                             task_type="CAUSAL_LM"))
     model.print_trainable_parameters()
 
     steps_total = math.ceil(len(data) * args.epochs)
@@ -131,6 +138,8 @@ def main() -> None:
                   f"lr {sched.get_last_lr()[0]:.2e} {el / (step + 1):.2f}s/ex eta {eta / 60:.1f} min "
                   f"mem {torch.cuda.max_memory_allocated() / 2**30:.1f} GB", flush=True)
             running = 0.0
+        if args.save_every and (step + 1) % args.save_every == 0:
+            model.save_pretrained(args.out / f"step{step + 1}")
         if (step + 1) % len(data) == 0:
             v = val_loss()
             print(f"[train] epoch {(step + 1) // len(data)} done; val loss {v}", flush=True)
