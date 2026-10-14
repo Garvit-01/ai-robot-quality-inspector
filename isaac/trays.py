@@ -41,6 +41,10 @@ BAD_KINDS = (
 SPLITS = {"dev": range(20000, 20030), "eval": range(21000, 21040)}
 UNDERSIDE_CHIP_CORNERS = (0, 1, 2, 3, 4, 5)
 RUST_COVERAGE = (0.25, 0.5)  # same range as faults.py's F5 rust
+# Parts lie nearly aligned on the feed tray, as in a real feeder nest, and the suction cup
+# doesn't turn them: the top camera then sees them as the verifier was trained (faults.py's
+# NOMINAL_YAW_JITTER_DEG), so top chips and cracks face it.
+FEED_YAW_DEG = (-4.0, 4.0)
 
 
 @dataclass(frozen=True)
@@ -91,7 +95,7 @@ class TraySpec:
 def _bad_part(kind: str, slot: int, rng: random.Random, ps: partsets.PartSet) -> TrayPart:
     what, detail = kind.split(":")
     base = dict(slot=slot, chip_mm=None, chip_corner=None, crack_mm=None, crack_angle_deg=None,
-                rust_coverage=None, feed_yaw_deg=round(rng.uniform(0.0, 60.0), 3))
+                rust_coverage=None, feed_yaw_deg=round(rng.uniform(*FEED_YAW_DEG), 3))
     if what == "wrong":
         return TrayPart(part=detail, kind="wrong", defect=None, side=None, **base)
     side = detail
@@ -118,7 +122,7 @@ def make_tray(seed: int) -> TraySpec:
         if kind == "good":
             parts.append(TrayPart(slot=slot, part=ps.correct.name, kind="good", defect=None, side=None,
                                   chip_mm=None, chip_corner=None, crack_mm=None, crack_angle_deg=None,
-                                  rust_coverage=None, feed_yaw_deg=round(rng.uniform(0.0, 60.0), 3)))
+                                  rust_coverage=None, feed_yaw_deg=round(rng.uniform(*FEED_YAW_DEG), 3)))
         else:
             parts.append(_bad_part(kind, slot, rng, ps))
     return TraySpec(seed=seed, parts=tuple(parts))

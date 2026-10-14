@@ -89,3 +89,9 @@ def test_wrong_parts_are_real_part_names():
                 assert p.part in names
             else:
                 assert p.part == partsets.FASTENER.correct.name
+
+
+@pytest.mark.parametrize("seed", ALL_TRAY_SEEDS)
+def test_feed_yaw_matches_training_jitter(seed):
+    for p in make_tray(seed).parts:
+        assert trays.FEED_YAW_DEG[0] <= p.feed_yaw_deg <= trays.FEED_YAW_DEG[1]
