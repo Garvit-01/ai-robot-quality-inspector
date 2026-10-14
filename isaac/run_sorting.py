@@ -51,6 +51,7 @@ ap.add_argument("--out", type=Path, default=REPO / "runs" / "sorting" / "test")
 ap.add_argument("--verifier", default="http://127.0.0.1:8765", help="service URL, or 'oracle'")
 ap.add_argument("--gui", action="store_true")
 ap.add_argument("--move-steps", type=int, default=600, help="step budget per waypoint")
+ap.add_argument("--debug", action="store_true", help="first part only; print every waypoint")
 args, _ = ap.parse_known_args()
 
 from isaacsim.simulation_app import SimulationApp  # noqa: E402
@@ -83,7 +84,9 @@ ROBOT_USD = f"{partsets.ASSET_ROOT}/Isaac/Robots/UniversalRobots/ur10/ur10.usd"
 
 # --- layout of the line (metres, table top z = 0, robot base at the origin) ---------------
 NEST = (L.CARRIER_SLOT[0], L.CARRIER_SLOT[1])
-FEED_SLOTS = [(x, y) for y in (-0.41, -0.35) for x in (0.17, 0.22, 0.27)]   # feed tray, 3 x 2
+# Feed tray: clear of the carrier, and far enough from the robot's base for RMPflow; at
+# x = 0.17-0.27 the arm stalled ~13 cm short of the slots and its descent swept the nuts away.
+FEED_SLOTS = [(x, y) for y in (-0.42, -0.36) for x in (0.30, 0.35, 0.40)]   # feed tray, 3 x 2
 RACK_SLOTS = [(x, y) for y in (0.25, 0.31) for x in (0.35, 0.40, 0.45)]     # good parts, 3 x 2
 PLATE_TOP = 0.006
 UNDER_CAM = (0.30, 0.02, 0.004)        # upward-looking camera on the table
@@ -92,10 +95,13 @@ PARK = np.array([0.10, 0.30, 0.45])     # arm out of the inspection views
 EE_DOWN = euler_angles_to_quat(np.array([0, np.pi / 2.0, 0]))  # suction cup pointing down
 EE_OFFSET = 0.02                        # suction tip above the part centre, as NVIDIA's example
 SAFE_Z = 0.20
+# Long moves go through a point above the middle of the table: straight from PARK (+y) to the
+# feed tray or nest (-y) RMPflow stalled ~15 cm short (a local minimum swinging the base round).
+VIA = np.array([0.40, 0.0, 0.32])
 
 UNDERSIDE_QUESTION = """Checkpoint: CP_PRE_GRASP. The image is a close-up photo taken from BELOW of
 the part the robot's suction gripper is holding: {part}. You see the part's underside against
-the dark gripper. Decide only whether the part is wrong or physically damaged.
+the robot's blue suction cup. Decide only whether the part is wrong or physically damaged.
 - A bolt, or a nut clearly smaller or larger than an M16 nut: wrong_part.
 - A corner cut off, a dark crack line, or brown rust on the underside: defective_part.
 - Otherwise: step_ok true, failure_type none.
@@ -222,12 +228,17 @@ def build(world):
     for p in stage.Traverse():
         if str(p.GetPath()).startswith("/World/Bin/") and p.IsA(UsdGeom.Gprim):
             collide(p)
-    box(stage, "/World/Sort/feed_tray", (0.17, 0.11, PLATE_TOP), (0.22, -0.38, PLATE_TOP / 2), (0.25, 0.27, 0.30))
+    box(stage, "/World/Sort/feed_tray", (0.17, 0.11, PLATE_TOP), (0.35, -0.39, PLATE_TOP / 2), (0.25, 0.27, 0.30))
     box(stage, "/World/Sort/rack", (0.17, 0.11, PLATE_TOP), (0.40, 0.28, PLATE_TOP / 2), (0.20, 0.45, 0.25))
 
     # Upward-looking camera: a camera's view axis is its -Z, so turn it 180 degrees about X.
     cam = UsdGeom.Camera.Define(stage, "/World/Cameras/Underside")
     cam.CreateFocalLengthAttr(40.0)
+    cam.CreateHorizontalApertureAttr(20.955)
+    cam.CreateVerticalApertureAttr(20.955 * 768 / 1024)
+    # USD's default near clip is 1 unit = 1 m here: the part 12.5 cm above was clipped away and
+    # the first underside photos showed only the ceiling. Same range as the dataset cameras.
+    cam.CreateClippingRangeAttr(Gf.Vec2f(0.01, 100.0))
     UsdGeom.XformCommonAPI(cam).SetTranslate(Gf.Vec3d(*UNDER_CAM))
     UsdGeom.XformCommonAPI(cam).SetRotate(Gf.Vec3f(180.0, 0.0, 0.0))
     ring = UsdLux.SphereLight.Define(stage, "/World/Lights/UndersideRing")
@@ -251,35 +262,61 @@ class Arm:
         self.world, self.ur10 = world, ur10
         self.rmp = RMPFlowController(name="rmp", robot_articulation=ur10, attach_gripper=True)
         self.ctrl = ur10.get_articulation_controller()
+        # RMPflow steers the suction-cup TIP; the articulation's end effector is the wrist
+        # flange (ee_link) above it. Measure the offset once, by settling on a target: checking
+        # the flange against tip targets read as 161.7 mm short of every waypoint (first runs).
+        self.tip_offset = np.zeros(3)
+        self.go(PARK, tol=0.0, label="calibrate", steps=900)
+        self.tip_offset = self.flange() - PARK
+        print(f"[arm] flange-to-tip offset {np.round(self.tip_offset, 4)} m", flush=True)
 
-    def step(self, n: int = 1):
+    def step(self, n: int = 1, render: bool = False):
+        # Motion steps don't render (3 ray-traced cameras per step made a part take ~10 min);
+        # captures render on their own, without pausing the timeline.
         for _ in range(n):
-            self.world.step(render=True)
+            self.world.step(render=render or args.gui)
 
-    def ee(self) -> np.ndarray:
+    def flange(self) -> np.ndarray:
         return np.asarray(self.ur10.end_effector.get_world_pose()[0])
 
-    def go(self, target, tol: float = 0.004) -> bool:
+    def ee(self) -> np.ndarray:
+        """The suction-cup tip: what RMPflow steers and what the waypoints are for."""
+        return self.flange() - self.tip_offset
+
+    def go(self, target, tol: float = 0.004, label: str = "", steps: int | None = None) -> bool:
         target = np.asarray(target, dtype=float)
-        for _ in range(args.move_steps):
+        here = self.ee()
+        if label not in ("calibrate", "via") and np.linalg.norm(here[:2] - target[:2]) > 0.30 and np.linalg.norm(here[:2] - VIA[:2]) > 0.05:
+            self.go(VIA, tol=0.02, label="via")
+        for i in range(steps or args.move_steps):
             self.ctrl.apply_action(self.rmp.forward(target_end_effector_position=target,
                                                     target_end_effector_orientation=EE_DOWN))
             self.step()
             if np.linalg.norm(self.ee() - target) < tol:
-                return True
-        return False
+                break
+        err = float(np.linalg.norm(self.ee() - target))
+        if args.debug:
+            print(f"[move] {label:<14} target {np.round(target, 3)} ee {np.round(self.ee(), 3)} "
+                  f"err {err * 1000:.1f} mm steps {i + 1}", flush=True)
+        return err < tol
 
     def grip(self, on: bool):
         (self.ur10.gripper.close if on else self.ur10.gripper.open)()
         self.step(20)
-        return bool(self.ur10.gripper.is_closed())
+        closed = bool(self.ur10.gripper.is_closed())
+        if args.debug:
+            print(f"[grip] {'close' if on else 'open'} -> closed={closed}", flush=True)
+        return closed
 
     def pick(self, part: Part) -> bool:
         p = part.pos()
-        self.go([p[0], p[1], SAFE_Z])
-        self.go([p[0], p[1], p[2] + EE_OFFSET], tol=0.003)
+        if not self.go([p[0], p[1], SAFE_Z], label="above part"):
+            return False  # never descend from somewhere else: the sweep pushes parts away
+        self.go([p[0], p[1], p[2] + EE_OFFSET], tol=0.003, label="down to part")
         held = self.grip(True)
-        self.go([p[0], p[1], SAFE_Z])
+        self.go([p[0], p[1], SAFE_Z], label="lift")
+        if args.debug:
+            print(f"[pick] part {part.tp.slot} was at {np.round(p, 3)}, now {np.round(part.pos(), 3)}", flush=True)
         return held
 
     def place(self, xy, part: Part, surface_z: float, drop_height: float = 0.002):
@@ -351,8 +388,8 @@ def main() -> int:
         annot[name] = a
 
     def shoot(names, stem):
-        for _ in range(3):  # settle: RTX temporal history would ghost the previous view
-            rep.orchestrator.step(rt_subframes=8, pause_timeline=False)
+        arm.step(3, render=True)  # settle: RTX temporal history would ghost the previous view
+        rep.orchestrator.step(rt_subframes=8, pause_timeline=False)
         paths = []
         for n in names:
             p = out / "images" / f"{stem}_{n}.png"
@@ -370,6 +407,8 @@ def main() -> int:
     for seed in seeds:
         tray = trays.make_tray(seed)
         parts = [Part(stage, cell, tp, FEED_SLOTS[tp.slot]) for tp in tray.parts]
+        if args.debug:
+            parts = parts[:1]
         arm.step(60)
         rack_i = 0
         t_tray = time.time()
