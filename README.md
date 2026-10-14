@@ -194,8 +194,10 @@ Stated up front because they are the honest frame for every number here.
 
 - **Sim only.** Trained and evaluated on rendered scenes; train and test come from the same
   simulator, camera and parts. 94% shows the model can learn the cues untrained models miss;
-  it is not evidence of real-world reliability. A real-photo check on public factory images
-  (MVTec AD) is in progress.
+  it is not evidence of real-world reliability. We checked: on 275 real factory photos (MVTec
+  AD, metal nuts and screws) the fine-tuned model calls almost everything defective (91-100% of
+  good parts flagged), while untrained general models catch about half the real damage with
+  few false alarms. Closing that gap needs real images in the training mix.
 - **Visible damage only.** The single inspection camera only sees damage on the faces it
   looks at, so the benchmark only places damage there. Underside damage needs a second camera
   (in progress).
