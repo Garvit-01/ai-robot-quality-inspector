@@ -111,6 +111,14 @@ def _bad_part(kind: str, slot: int, rng: random.Random, ps: partsets.PartSet) ->
     return TrayPart(part=ps.correct.name, kind="defective", defect=what, side=side, **base)
 
 
+def injected_part(kind: str, slot: int, seed: int) -> TrayPart:
+    """A bad part of `kind` (one of BAD_KINDS) put on the feed tray during a run, from the
+    operator screen. Deterministic for (kind, slot, seed), like every other part."""
+    if kind not in BAD_KINDS:
+        raise ValueError(f"unknown kind {kind!r}; expected one of {BAD_KINDS}")
+    return _bad_part(kind, slot, random.Random(f"inject-{seed}-{slot}-{kind}"), partsets.FASTENER)
+
+
 def make_tray(seed: int) -> TraySpec:
     """Derive the full tray for `seed`. Deterministic and side-effect free."""
     ps = partsets.FASTENER

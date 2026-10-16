@@ -95,3 +95,20 @@ def test_wrong_parts_are_real_part_names():
 def test_feed_yaw_matches_training_jitter(seed):
     for p in make_tray(seed).parts:
         assert trays.FEED_YAW_DEG[0] <= p.feed_yaw_deg <= trays.FEED_YAW_DEG[1]
+
+
+@pytest.mark.parametrize("kind", trays.BAD_KINDS)
+def test_injected_part_is_the_requested_bad_kind(kind):
+    p = trays.injected_part(kind, 3, 21000)
+    what, detail = kind.split(":")
+    assert p.slot == 3 and not p.good and p.correct_action == "reject"
+    if what == "wrong":
+        assert (p.kind, p.part) == ("wrong", detail)
+    else:
+        assert (p.kind, p.defect, p.side) == ("defective", what, detail)
+    assert p == trays.injected_part(kind, 3, 21000)  # deterministic
+
+
+def test_injected_part_rejects_unknown_kinds():
+    with pytest.raises(ValueError):
+        trays.injected_part("good", 0, 21000)
