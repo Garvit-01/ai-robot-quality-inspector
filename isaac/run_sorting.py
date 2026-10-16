@@ -133,10 +133,13 @@ class Part:
     """One physics part: rigid body, invisible cylinder collider, NVIDIA's visual mesh with
     this part's damage applied (top or underside), origin at the part's centre."""
 
-    def __init__(self, stage, cell, tp: trays.TrayPart, xy):
+    def __init__(self, stage, cell, tp: trays.TrayPart, xy, tag: str):
         self.tp, self.pd = tp, PARTS[tp.part]
         ax, ay, az = self.pd.dims
-        path = f"/World/Sort/part{tp.slot}"
+        # A new path for every part ever made (tag = tray + slot): reusing /World/Sort/part4 for
+        # the next tray's part, with a different mesh, left the renderer stale buffers from the
+        # old one ("expected 45240, got 77004") and crashed Isaac Sim on Oct 16.
+        path = f"/World/Sort/{tag}"
         self.body = UsdGeom.Xform.Define(stage, path)
         UsdGeom.XformCommonAPI(self.body).SetTranslate(Gf.Vec3d(xy[0], xy[1], PLATE_TOP + az / 2 + 0.001))
         UsdGeom.XformCommonAPI(self.body).SetRotate(Gf.Vec3f(0, 0, tp.feed_yaw_deg))
@@ -378,6 +381,19 @@ def ask(system: str, user: str, images: list[Path]) -> dict:
             "latency_ms": round((time.monotonic() - t0) * 1000)}
 
 
+def take_injection(out: Path) -> str | None:
+    """The fault the operator screen queued (out/inject.json: {"kind": "chip:underside"}), once."""
+    f = out / "inject.json"
+    if not f.exists():
+        return None
+    try:
+        kind = json.loads(f.read_text())["kind"]
+    except (json.JSONDecodeError, KeyError):
+        kind = None
+    f.unlink()
+    return kind if kind in trays.BAD_KINDS else None
+
+
 def oracle(tp: trays.TrayPart, view: str) -> dict:
     return {"failure_type": tp.expected(view), "raw": "oracle", "latency_ms": 0}
 
@@ -415,18 +431,27 @@ def main() -> int:
     system, top_q, under_q = prompts(CFG)  # the same text the training data uses
 
     log = (out / "parts.jsonl").open("a")
+    events = (out / "events.jsonl").open("a")  # one line per part as soon as it is decided
     for seed in seeds:
         tray = trays.make_tray(seed)
-        parts = [Part(stage, cell, tp, FEED_SLOTS[tp.slot]) for tp in tray.parts]
+        parts = [Part(stage, cell, tp, FEED_SLOTS[tp.slot], f"t{seed}_part{tp.slot}") for tp in tray.parts]
         if args.debug:
             parts = parts[:1]
         arm.step(60)
         rack_i = 0
         t_tray = time.time()
-        for part in parts:
+        for i, part in enumerate(parts):
+            injected = take_injection(out)
+            if injected:  # the operator screen asked for a fault: swap the next part on the feed tray
+                part.remove()
+                arm.step(2)
+                part = parts[i] = Part(stage, cell, trays.injected_part(injected, part.tp.slot, seed),
+                                       FEED_SLOTS[part.tp.slot], f"t{seed}_part{part.tp.slot}_injected")
+                arm.step(30)
+                print(f"[sort] tray {seed} slot {part.tp.slot}: injected {injected}", flush=True)
             tp, t0 = part.tp, time.time()
             rec = {"tray": seed, "slot": tp.slot, "part": tp.part, "kind": tp.kind, "defect": tp.defect,
-                   "side": tp.side, "correct_action": tp.correct_action}
+                   "side": tp.side, "correct_action": tp.correct_action, "injected": bool(injected)}
             held1 = arm.pick(part)
             arm.place(NEST, part, L.CARRIER_TOP)
             arm.go(PARK, tol=0.02)
@@ -460,6 +485,8 @@ def main() -> int:
                   f"top={vt['failure_type']:<15} under={vu['failure_type']:<15} -> {action:<6} "
                   f"{'OK' if rec['decision_correct'] else 'WRONG'}", flush=True)
             part.rec = rec
+            events.write(json.dumps(rec) + "\n")  # for the operator screen, before the tray ends
+            events.flush()
         arm.go(PARK, tol=0.02)
         arm.step(90)
         for part in parts:  # where did each part physically end up?
@@ -474,6 +501,7 @@ def main() -> int:
         log.flush()
         print(f"[sort] tray {seed} done in {time.time() - t_tray:.0f}s", flush=True)
     log.close()
+    events.close()
     rep.orchestrator.wait_until_complete()
     app.close()
     return 0
