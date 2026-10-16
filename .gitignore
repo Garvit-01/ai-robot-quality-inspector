@@ -31,6 +31,7 @@ finetune/data/
 finetune/checkpoints/
 # trained LoRA adapter (~200 MB): an artefact, rebuilt by finetune/run_finetune.sh
 finetune/adapter/
+finetune/adapter_*/
 *.safetensors
 *.bin
 
