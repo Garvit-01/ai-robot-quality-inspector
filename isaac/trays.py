@@ -39,7 +39,11 @@ BAD_KINDS = (
     "chip:underside", "crack:underside", "rust:underside",
 )
 SPLITS = {"dev": range(20000, 20030), "eval": range(21000, 21040),
-          "train": range(22000, 22200)}  # train: rendered with oracle decisions, for fine-tuning
+          "train": range(22000, 22200),
+          # Extra training trays whose bad parts are all chipped nuts (Oct 17): the live run
+          # shipped 22 of 26 chips although they are clearly visible; training had only 134.
+          "train_chips": range(23000, 23100)}
+CHIP_KINDS = ("chip:top", "chip:underside")  # train: rendered with oracle decisions, for fine-tuning
 UNDERSIDE_CHIP_CORNERS = (0, 1, 2, 3, 4, 5)
 RUST_COVERAGE = (0.25, 0.5)  # same range as faults.py's F5 rust
 # Parts lie nearly aligned on the feed tray, as in a real feeder nest, and the suction cup
@@ -123,7 +127,8 @@ def make_tray(seed: int) -> TraySpec:
     """Derive the full tray for `seed`. Deterministic and side-effect free."""
     ps = partsets.FASTENER
     rng = random.Random(f"tray-{seed}")  # str seeds are stable across runs and machines
-    kinds = ["good"] * GOOD_PER_TRAY + [BAD_KINDS[(seed * (SLOTS - GOOD_PER_TRAY) + i) % len(BAD_KINDS)]
+    pool = CHIP_KINDS if seed in SPLITS["train_chips"] else BAD_KINDS
+    kinds = ["good"] * GOOD_PER_TRAY + [pool[(seed * (SLOTS - GOOD_PER_TRAY) + i) % len(pool)]
                                         for i in range(SLOTS - GOOD_PER_TRAY)]
     rng.shuffle(kinds)
     parts = []

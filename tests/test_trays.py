@@ -112,3 +112,13 @@ def test_injected_part_is_the_requested_bad_kind(kind):
 def test_injected_part_rejects_unknown_kinds():
     with pytest.raises(ValueError):
         trays.injected_part("good", 0, 21000)
+
+
+def test_chip_trays_hold_only_chips_on_both_sides():
+    sides = Counter()
+    for seed in SPLITS["train_chips"]:
+        for p in make_tray(seed).parts:
+            if not p.good:
+                assert (p.kind, p.defect) == ("defective", "chip")
+                sides[p.side] += 1
+    assert sides["top"] == sides["underside"] == 150
