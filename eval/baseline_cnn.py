@@ -45,11 +45,18 @@ class Photos(torch.utils.data.Dataset):
         return self.tf(Image.open(self.root / img).convert("RGB")), y
 
 
+def zoom(img: Image.Image) -> Image.Image:
+    """The middle half of the 1024x768 photo, where the nut is: 2x the pixels on the part."""
+    w, h = img.size
+    return img.crop((w // 4, h // 4, 3 * w // 4, h // 4 + h // 2))
+
+
 def train_view(view: str, args, device) -> list[dict]:
     norm = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    tf_train = transforms.Compose([transforms.Resize((240, 320)), transforms.ColorJitter(0.2, 0.2, 0.1),
+    first = [transforms.Lambda(zoom)] if args.zoom else []
+    tf_train = transforms.Compose(first + [transforms.Resize((240, 320)), transforms.ColorJitter(0.2, 0.2, 0.1),
                                    transforms.RandomAffine(4, translate=(0.03, 0.03)), transforms.ToTensor(), norm])
-    tf_eval = transforms.Compose([transforms.Resize((240, 320)), transforms.ToTensor(), norm])
+    tf_eval = transforms.Compose(first + [transforms.Resize((240, 320)), transforms.ToTensor(), norm])
     train = load(args.train, view)
     dev = load(args.dev, view)
     counts = torch.bincount(torch.tensor([y for *_, y in train]), minlength=len(CLASSES)).float()
@@ -83,8 +90,10 @@ def train_view(view: str, args, device) -> list[dict]:
         for seed, img, _ in dev:
             t0 = time.time()
             x = tf_eval(Image.open(args.images / img).convert("RGB")).unsqueeze(0).to(device)
-            pred = CLASSES[int(net(x).argmax(1))]
-            raw = json.dumps({"checkpoint": "CP_PRE_GRASP", "step_ok": pred == "none", "failure_type": pred})
+            probs = torch.softmax(net(x), 1)[0]
+            pred = CLASSES[int(probs.argmax())]
+            raw = json.dumps({"checkpoint": "CP_PRE_GRASP", "step_ok": pred == "none", "failure_type": pred,
+                              "probs": {c: round(float(q), 4) for c, q in zip(CLASSES, probs)}})
             out.append({"seed": seed, "raw": raw, "latency_ms": round((time.time() - t0) * 1000)})
     return out
 
@@ -100,6 +109,7 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--zoom", action="store_true", help="crop to the middle of the photo (the nut) first")
     args = ap.parse_args()
     torch.manual_seed(args.seed)
     torch.set_num_threads(args.threads)
