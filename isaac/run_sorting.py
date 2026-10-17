@@ -54,6 +54,9 @@ ap.add_argument("--move-steps", type=int, default=600, help="step budget per way
 ap.add_argument("--debug", action="store_true", help="first part only; print every waypoint")
 ap.add_argument("--lighting", choices=("per_part", "fixed"), default="per_part",
                 help="per_part: new randomised lighting + camera nudge for every part, as in the training data")
+ap.add_argument("--film", type=Path, default=None,
+                help="also save a wide view of the whole cell as video frames here (slow: one tray)")
+ap.add_argument("--film-every", type=int, default=4, help="physics steps per film frame (60 Hz physics)")
 args, _ = ap.parse_known_args()
 
 from isaacsim.simulation_app import SimulationApp  # noqa: E402
@@ -275,9 +278,22 @@ def build(world):
 
 
 # --- motion --------------------------------------------------------------------------
+FILM = {"annot": None, "n": 0}  # --film: the wide camera's annotator and the frame counter
+
+
+def film_mark(**event):
+    """With --film: note what happened at the current frame (photos, decisions) in marks.jsonl,
+    for eval/film_overlay.py to show next to the wide view."""
+    if FILM["annot"] is not None:
+        with (args.film / "marks.jsonl").open("a") as fh:
+            fh.write(json.dumps({"frame": FILM["n"], **event}) + "\n")
+FILM_EYE, FILM_TARGET = (1.45, -0.05, 1.05), (0.33, -0.03, 0.18)  # sees feed, nest, camera, rack, bin
+
+
 class Arm:
     def __init__(self, world, ur10):
         self.world, self.ur10 = world, ur10
+        self.n_steps = 0
         self.rmp = RMPFlowController(name="rmp", robot_articulation=ur10, attach_gripper=True)
         self.ctrl = ur10.get_articulation_controller()
         # RMPflow steers the suction-cup TIP; the articulation's end effector is the wrist
@@ -290,9 +306,17 @@ class Arm:
 
     def step(self, n: int = 1, render: bool = False):
         # Motion steps don't render (3 ray-traced cameras per step made a part take ~10 min);
-        # captures render on their own, without pausing the timeline.
+        # captures render on their own, without pausing the timeline. With --film, every
+        # film_every-th step renders and saves a frame of the wide film camera.
         for _ in range(n):
-            self.world.step(render=render or args.gui)
+            self.n_steps += 1
+            film_now = FILM["annot"] is not None and self.n_steps % args.film_every == 0
+            self.world.step(render=render or args.gui or film_now)
+            if film_now:
+                frame = np.asarray(FILM["annot"].get_data())
+                if frame.size:
+                    Image.fromarray(frame[:, :, :3]).save(args.film / f"{FILM['n']:06d}.jpg", quality=92)
+                    FILM["n"] += 1
 
     def flange(self) -> np.ndarray:
         return np.asarray(self.ur10.end_effector.get_world_pose()[0])
@@ -418,6 +442,17 @@ def main() -> int:
         a.attach([rep.create.render_product(path, res)])
         annot[name] = a
 
+    if args.film:
+        args.film.mkdir(parents=True, exist_ok=True)
+        fcam = UsdGeom.Camera.Define(stage, "/World/Cameras/Film")
+        fcam.CreateFocalLengthAttr(14.0)
+        fcam.CreateHorizontalApertureAttr(20.955)
+        fcam.CreateVerticalApertureAttr(20.955 * 720 / 1280)
+        fcam.CreateClippingRangeAttr(Gf.Vec2f(0.01, 100.0))
+        cell._look_at(fcam, FILM_EYE, FILM_TARGET)
+        FILM["annot"] = rep.AnnotatorRegistry.get_annotator("rgb")
+        FILM["annot"].attach([rep.create.render_product("/World/Cameras/Film", (1280, 720))])
+
     def shoot(names, stem):
         arm.step(3, render=True)  # settle: RTX temporal history would ghost the previous view
         rep.orchestrator.step(rt_subframes=8, pause_timeline=False)
@@ -426,6 +461,7 @@ def main() -> int:
             p = out / "images" / f"{stem}_{n}.png"
             Image.fromarray(np.asarray(annot[n].get_data())[:, :, :3]).save(p)
             paths.append(p)
+        film_mark(event="photo", stem=stem, paths=[str(q) for q in paths])
         return paths
 
     system, top_q, under_q = prompts(CFG)  # the same text the training data uses
@@ -449,6 +485,7 @@ def main() -> int:
                                        FEED_SLOTS[part.tp.slot], f"t{seed}_part{part.tp.slot}_injected")
                 arm.step(30)
                 print(f"[sort] tray {seed} slot {part.tp.slot}: injected {injected}", flush=True)
+                film_mark(event="injected", kind=injected, tray=seed, slot=part.tp.slot)
             tp, t0 = part.tp, time.time()
             rec = {"tray": seed, "slot": tp.slot, "part": tp.part, "kind": tp.kind, "defect": tp.defect,
                    "side": tp.side, "correct_action": tp.correct_action, "injected": bool(injected)}
@@ -485,6 +522,7 @@ def main() -> int:
                   f"top={vt['failure_type']:<15} under={vu['failure_type']:<15} -> {action:<6} "
                   f"{'OK' if rec['decision_correct'] else 'WRONG'}", flush=True)
             part.rec = rec
+            film_mark(event="decision", **rec)
             events.write(json.dumps(rec) + "\n")  # for the operator screen, before the tray ends
             events.flush()
         arm.go(PARK, tol=0.02)
