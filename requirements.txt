@@ -11,3 +11,4 @@ pillow>=10.0
 numpy>=1.26
 matplotlib>=3.8
 pytest>=8.0
+streamlit>=1.40     # dashboard/app.py, the operator screen

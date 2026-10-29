@@ -15,7 +15,7 @@ DEMO_SEEDS := 1000,1001,1002,1003,1005,1007,1009,1012,1014,1031
 
 SEED      ?= 1031
 
-.PHONY: help status test smoke demo view bench-demo eval report
+.PHONY: help status test smoke demo view bench-demo eval report dashboard
 
 help:  ## list what you can run
 	@echo "make status       progress dashboard: milestones, latest results, what's running (free, instant)"
@@ -26,6 +26,7 @@ help:  ## list what you can run
 	@echo "make bench-demo   score the verifier on those demo scenes (~1 cent, ~1 min)"
 	@echo "make eval         full held-out check: render 120 + score + A/B/C/D + PDF (~5 cents, ~15 min)"
 	@echo "make report       rebuild the PDF from the latest results (free, seconds)"
+	@echo "make dashboard    operator screen for the sorting line at http://localhost:8501 (free)"
 	@echo ""
 	@echo "Add PART=cube to use the original cubes instead of fasteners, e.g. make demo PART=cube"
 
@@ -59,6 +60,9 @@ eval:
 	$(PY) eval/bench_decisions.py $(EVAL) runs/bench/$(PREFIX)eval_check__$(PART) --config $(CONFIG) --out runs/decisions/$(PREFIX)eval_check
 	$(PY) eval/make_report.py runs/bench/$(PREFIX)eval_check__$(PART) --decisions runs/decisions/$(PREFIX)eval_check --out reports/eval_check_$(PART).pdf
 	@echo "report: reports/eval_check_$(PART).pdf"
+
+dashboard:
+	$(PY) -m streamlit run dashboard/app.py --server.headless true --server.port 8501
 
 report:
 	$(PY) eval/make_report.py runs/bench/fdev_v2__fastener-v1 runs/bench/feval_v1__fastener-v1 --decisions runs/decisions/feval_v1 --out reports/evaluation_report_fastener.pdf

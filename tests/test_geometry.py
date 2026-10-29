@@ -189,3 +189,71 @@ def test_rust_covers_the_requested_fraction_in_patches_and_is_deterministic():
     same = sum(rusty[i] == rusty[nearest(i)] for i in sample) / len(sample)
     assert same > 0.8
     assert rust_pattern(pts, seed=6, coverage=0.35)[0] != c1
+
+
+# --- underside damage (sorting cell) ------------------------------------------------------
+
+def _hex_points(across_corners=0.0277, mid_z=0.0225, half_h=0.0065, rings=4):
+    """A hex prism's corner and edge points, top and bottom, as a stand-in nut mesh."""
+    import math
+    pts = []
+    for k in range(rings + 1):
+        z = mid_z - half_h + 2 * half_h * k / rings
+        for c in range(6):
+            a = math.radians(90 + 60 * c)
+            pts.append((across_corners / 2 * math.cos(a), across_corners / 2 * math.sin(a), z))
+    return pts
+
+
+def test_underside_chip_moves_only_bottom_points():
+    from geometry import hex_corner_cut_underside
+    pts = _hex_points()
+    mid, hh = 0.0225, 0.0065
+    out, moved = hex_corner_cut_underside(pts, 4, 0.0277, mid, hh, 0.004)
+    assert moved >= 1
+    for p, q in zip(pts, out):
+        if p != q:
+            assert p[2] < mid  # only the lower half is cut
+            assert q[2] >= p[2] - 1e-12  # material is removed upward/inward, never added below
+
+
+def test_underside_chip_mirrors_top_chip():
+    from geometry import hex_corner_cut, hex_corner_cut_underside
+    pts = _hex_points()
+    mid, hh = 0.0225, 0.0065
+    top, mt = hex_corner_cut(pts, 2, 0.0277, mid + hh, 0.004)
+    under, mu = hex_corner_cut_underside(pts, 2, 0.0277, mid, hh, 0.004)
+    assert mt == mu
+    mirrored_top = sorted((round(p[0], 9), round(p[1], 9), round(2 * mid - p[2], 9)) for p in top)
+    assert mirrored_top == sorted((round(p[0], 9), round(p[1], 9), round(p[2], 9)) for p in under)
+
+
+def test_underside_crack_stays_on_the_bearing_ring():
+    import math
+    from geometry import underside_crack
+    for seed in range(20):
+        for length in (0.006, 0.010):
+            pts, counts, idx = underside_crack(length, seed * 37.0, seed, bottom_z=-0.0065, ring_radius=0.010)
+            assert len(idx) == 4 * len(counts)
+            for x, y, z in pts:
+                r = math.hypot(x, y)
+                assert 0.008 <= r <= 0.0124, (seed, length, r)  # between the hole and the corners' inner ring
+                assert z < -0.0065  # just below the bottom face
+
+
+def test_underside_crack_faces_down():
+    from geometry import underside_crack
+    pts, counts, idx = underside_crack(0.008, 0.0, 1, bottom_z=-0.0065, ring_radius=0.010)
+    a, b, c = (pts[i] for i in idx[:3])
+    nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    assert nz < 0  # normal points to -z, towards the upward camera
+
+
+def test_mask_to_underside_keeps_rust_low_only():
+    from geometry import STEEL, mask_to_underside, rust_pattern
+    pts = _hex_points()
+    cols, metal, rough = rust_pattern(pts, 3, 0.5)
+    c2, m2, r2 = mask_to_underside(pts, cols, metal, rough, 0.0225)
+    for p, c, m, r in zip(pts, c2, m2, r2):
+        if p[2] > 0.0225:
+            assert (c, m, r) == STEEL

@@ -19,6 +19,7 @@
 #   eval      score the fine-tuned model on the same held-out scenes — only for the final pick
 #   pull      bring the adapter and the raw replies back here
 #   score     parse + score both runs exactly like every other benchmark, A/B/C/D, PDF
+#   retrain   (Oct 15) sorting-cell photos + original data, variants A and B side by side
 #   nemotron  (optional) NVIDIA Nemotron-Nano-12B-v2-VL zero-shot on the held-out scenes, scored
 #             the same way. Own environment on the VM (setup_nemotron_vl.sh), ~25 GB download,
 #             ~30 s per scene on one H100
@@ -201,8 +202,30 @@ if [ -n "${1:-}" ] && [ "$1" != data ] && [ -z "$VM_IP" ]; then
   exit 2
 fi
 
+# -----------------------------------------------------------------------------------------
+# 10. RETRAIN (Oct 15) — the sorting cell's photos mixed with the original data, two
+#     variants side by side on one H100 (each ~22 GB), to pick the better one on dev:
+#       A  the Oct 12 recipe (LoRA rank 16 on the language model AND the vision encoder)
+#       B  vision encoder frozen, rank 8, lr 5e-5 (gentler; research of Oct 14)
+#     Data: finetune/data/mix_train.jsonl (1,200 original + 2,400 sorting-cell examples);
+#     validation = the 60 original dev scenes + 60 random sorting dev examples.
+#     Needs: `push` plus runs/sorting/train_data and dev_data copied to scenes/ (done below).
+# -----------------------------------------------------------------------------------------
+step_retrain() {
+  say "retrain: upload sorting-cell data, then variants A and B side by side"
+  eval $RSYNC finetune/data/mix_train.jsonl finetune/data/sort_dev.jsonl "$VM_USER@$VM_IP:~/$VM_DIR/"
+  for d in runs/sorting/train_data runs/sorting/dev_data; do
+    eval $RSYNC --include="'*/'" --include="'*.png'" --exclude="'*'" "$d" "$VM_USER@$VM_IP:~/$VM_DIR/scenes/"
+  done
+  vm ".venv/bin/python -c \"import random; random.seed(0); d=[l for l in open('dev.jsonl') if l.strip()]; s=[l for l in open('sort_dev.jsonl') if l.strip()]; open('val_mix.jsonl','w').writelines(d+random.sample(s,60))\""
+  vm "nohup .venv/bin/python train_lora.py --data mix_train.jsonl --val val_mix.jsonl --images scenes --out adapter_A --epochs 1 --save-every 1200 > train_A.log 2>&1 &"
+  sleep 20
+  vm "nohup .venv/bin/python train_lora.py --data mix_train.jsonl --val val_mix.jsonl --images scenes --out adapter_B --epochs 1 --save-every 1200 --freeze-vision --rank 8 --lr 5e-5 > train_B.log 2>&1 &"
+  echo "started; watch with: ssh $VM_USER@$VM_IP tail -f ~/$VM_DIR/train_A.log ~/$VM_DIR/train_B.log"
+}
+
 case "${1:-}" in
   all) step_data; step_push; step_setup; step_baseline; step_train; mkdir -p "$DATA/gen"; step_dev; step_eval; step_pull; step_score ;;
-  data|push|setup|baseline|train|dev|eval|pull|score|nemotron) "step_$1" ;;
-  *) sed -n '2,31p' "$0"; exit 1 ;;
+  data|push|setup|baseline|train|dev|eval|pull|score|nemotron|retrain) "step_$1" ;;
+  *) sed -n '2,32p' "$0"; exit 1 ;;
 esac

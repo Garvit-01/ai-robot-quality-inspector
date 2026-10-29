@@ -262,3 +262,50 @@ def rust_pattern(points, seed: int, coverage: float, cell: float = 0.004):
             metal.append(1.0)
             rough.append(0.25)
     return colours, metal, rough
+
+
+# --- underside damage (sorting cell: seen only by the upward-looking camera) ---------------
+
+STEEL = ((0.72, 0.72, 0.74), 1.0, 0.25)  # rust_pattern's colour, metallic, roughness for bare steel
+
+
+def hex_corner_cut_underside(points, corner: int, across_corners: float, mid_z: float, half_height: float,
+                             chip: float):
+    """Chip one BOTTOM corner: hex_corner_cut on the part mirrored about its mid-plane, then
+    mirrored back, so the same tested cut geometry applies to the underside."""
+    mirrored = [(p[0], p[1], 2 * mid_z - p[2]) for p in points]
+    cut, moved = hex_corner_cut(mirrored, corner, across_corners, mid_z + half_height, chip)
+    return [(p[0], p[1], 2 * mid_z - p[2]) for p in cut], moved
+
+
+def underside_crack(length: float, radial_deg: float, seed: int, bottom_z: float, ring_radius: float,
+                    width: float = 0.0004, lift: float = 0.0002):
+    """A crack on a hex nut's bottom (bearing) face, which is a flat ring around the hole.
+
+    The ribbon runs as a chord across the ring, tangent at `ring_radius` from the axis, so a
+    6-10 mm crack stays on solid material between the 8 mm hole and the 12 mm flats.
+    Faces point down (-z), towards the upward-looking camera. Returns (points, counts, idx)
+    in the nut's centred frame."""
+    pts2d, counts, idx = crack_ribbon(length, 0.0, length / 2 + 0.0004, seed, width=width, segments=6,
+                                      margin=0.0, half_height=0.0006, wobble=0.0003)
+    phi = _math.radians(radial_deg)
+    ca, sa = _math.cos(phi + _math.pi / 2), _math.sin(phi + _math.pi / 2)  # chord direction
+    ox, oy = ring_radius * _math.cos(phi), ring_radius * _math.sin(phi)
+    pts = [(ox + x * ca - y * sa, oy + x * sa + y * ca, bottom_z - lift) for x, y, _ in pts2d]
+    flipped = []
+    for i in range(0, len(idx), 4):  # reverse each quad's winding: faces down
+        flipped += idx[i:i + 4][::-1]
+    return pts, counts, flipped
+
+
+def mask_to_underside(points, colours, metal, rough, mid_z: float):
+    """Keep rust only on the lower half of the part (the bottom face and the lower flats);
+    everything above the mid-plane goes back to bare steel."""
+    out_c, out_m, out_r = [], [], []
+    for p, c, m, r in zip(points, colours, metal, rough):
+        if p[2] > mid_z:
+            c, m, r = STEEL
+        out_c.append(c)
+        out_m.append(m)
+        out_r.append(r)
+    return out_c, out_m, out_r

@@ -8,6 +8,11 @@ every other benchmark, so the fine-tuned model is judged exactly like Gemma was.
 Usage (on the VM):
     .venv/bin/python generate.py --data eval.jsonl --images . --out gen_base.jsonl
     .venv/bin/python generate.py --data eval.jsonl --images . --adapter adapter --out gen_tuned.jsonl
+
+On a smaller GPU (the 15 GB T4, which has no bf16), load the weights compressed:
+    python generate.py ... --adapter adapter --quant 4bit --out gen_tuned_4bit.jsonl
+The adapter then stays separate (it can't be merged into compressed weights), and the
+held-out score must be re-checked: compression changes the numbers slightly.
 """
 from __future__ import annotations
 
@@ -32,16 +37,29 @@ def main() -> None:
     ap.add_argument("--max-new-tokens", type=int, default=512,
                     help="room for a <think> block: Cosmos-Reason1 is a reasoning model")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--quant", choices=("none", "8bit", "4bit"), default="none",
+                    help="compress the weights to fit a smaller GPU (computes in fp16)")
     args = ap.parse_args()
 
     processor = AutoProcessor.from_pretrained(MODEL, max_pixels=MAX_PIXELS)
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        MODEL, torch_dtype=torch.bfloat16, attn_implementation="sdpa", device_map="cuda")
+    if args.quant == "none":
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            MODEL, torch_dtype=torch.bfloat16, attn_implementation="sdpa", device_map="cuda")
+    else:
+        from transformers import BitsAndBytesConfig
+        bnb = (BitsAndBytesConfig(load_in_8bit=True) if args.quant == "8bit" else
+               BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                                  bnb_4bit_compute_dtype=torch.float16))
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            MODEL, torch_dtype=torch.float16, attn_implementation="sdpa", device_map="cuda",
+            quantization_config=bnb)
     if args.adapter:
         from peft import PeftModel
         model = PeftModel.from_pretrained(model, str(args.adapter))
-        model = model.merge_and_unload()  # same maths, faster generation
+        if args.quant == "none":
+            model = model.merge_and_unload()  # same maths, faster generation
     model.eval()
+    print(f"[gen] weights {args.quant}, GPU memory {torch.cuda.memory_allocated() / 2**30:.1f} GB", flush=True)
 
     data = [json.loads(l) for l in args.data.read_text().splitlines() if l.strip()]
     if args.limit:

@@ -68,7 +68,7 @@ def build_prompt(cfg: dict, checkpoint: str, views: list[str]) -> str:
     return f"{question}\n\nYou are given {len(views)} image(s): {described}.\n\n{prompts['schema_block']}"
 
 
-def call_verifier(client, model: str, cfg: dict, prompt: str, images: list[Path]) -> dict:
+def call_verifier(client, model: str, cfg: dict, prompt: str, images: list[Path], max_tokens: int = 400) -> dict:
     """One scene, with the same retry policy the pipeline uses. Never raises."""
     v = cfg["verifier"]
     content = [{"type": "text", "text": prompt}] + [
@@ -93,7 +93,7 @@ def call_verifier(client, model: str, cfg: dict, prompt: str, images: list[Path]
             try:
                 resp = client.chat.completions.create(
                     model=model, temperature=v.get("temperature", 0.0), messages=msgs,
-                    max_tokens=400)
+                    max_tokens=max_tokens)
                 out["latency_ms"] += (time.monotonic() - t0) * 1000
                 break
             except Exception as exc:  # noqa: BLE001 — recorded, never fatal
@@ -212,6 +212,8 @@ def main() -> int:
     ap.add_argument("--model", default=None, help="override VERIFIER_MODEL_ID")
     ap.add_argument("--views", default="overview,closeup")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--max-tokens", type=int, default=400,
+                    help="reply budget; reasoning models think before the JSON and need more")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--config", type=Path, default=None,
@@ -247,7 +249,7 @@ def main() -> int:
         sc = lab["scene"]
         prompt = build_prompt(cfg, sc["checkpoint"], views)
         imgs = [args.scene_dir / lab["images"][v] for v in views]
-        res = call_verifier(client, model, cfg, prompt, imgs)
+        res = call_verifier(client, model, cfg, prompt, imgs, args.max_tokens)
         return {"seed": lab["seed"], "fault": sc["fault"], "checkpoint": sc["checkpoint"],
                 "exp": sc["expected"], "truth": sc.get("truth", {}), "pred": res["parsed"],
                 "attempts": res["attempts"], "latency_ms": round(res["latency_ms"]),
