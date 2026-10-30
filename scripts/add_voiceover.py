@@ -22,7 +22,7 @@ import make_submission_video as M  # noqa: E402
 SPEED = 1.45  # the sorting footage, so the whole video stays under 3 minutes
 CARD_SECS = {"title": 3.0, "problem": 15.6, "how": 19.3, "live1": 6.8, "thread_intro": 5.6,
              "results": 12.0, "honest": 8.0, "end": 9.0}
-# Final take (Oct 30, 3:24 a.m. recording = "new"), with two sections from the earlier take ("old"):
+# Final take ("new"), with two sections from an earlier take ("old"):
 # the new take stumbles on "Here it is, running live" and on the results sentence. Pieces are
 # (start, end, segment, offset, source). Footage events (s into the footage, SPEED 1.45): crack top 7.1,
 # underside 10.7, decision 12.4; M12 decision 25.4; M20 38.2; good M16 51.1; bolt 63.4; last nut 76.2.
@@ -51,7 +51,7 @@ PIECES = [
     (150.65, 155.95, "end", 0.3, "new"),         # clean retake of the closing line (hesitant take dropped)
     (157.85, 159.70, "end", 6.05, "new"),        # "The code is on GitHub. Thanks for watching." (a click before it dropped)
 ]
-# Pieces for the earlier take alone (Oct 30, 1:49 a.m.), with its card durations, kept for reference:
+# Pieces for the earlier take alone, with its card durations, kept for reference:
 CARD_SECS_OLD = {"title": 4.0, "problem": 18.8, "how": 18.6, "live1": 4.6, "thread_intro": 6.0,
                  "results": 12.0, "honest": 8.5, "end": 9.2}
 PIECES_OLD = [
