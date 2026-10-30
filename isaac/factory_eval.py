@@ -15,9 +15,9 @@ reach it.
 
 Runs in Isaac Lab's conda environment (not this project's .venv):
     cd ~/IsaacLab && env -u VIRTUAL_ENV ~/miniconda3/bin/conda run --no-capture-output -n env_isaaclab \\
-        ./isaaclab.sh -p ~/nvidia_nebius_challenge_ws/isaac/factory_eval.py \\
+        ./isaaclab.sh -p /path/to/ai-robot-quality-inspector/isaac/factory_eval.py \\
         --task Isaac-Factory-NutThread-Direct-v0 --num_envs 16 --episodes 3 --headless \\
-        --out ~/nvidia_nebius_challenge_ws/runs/factory/nutthread
+        --out /path/to/ai-robot-quality-inspector/runs/factory/nutthread
 """
 import argparse
 import json

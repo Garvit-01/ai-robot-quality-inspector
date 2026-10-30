@@ -155,7 +155,7 @@ def main() -> None:
             ("Nebius: AI Cloud (H100 fine-tuning) · Token Factory (Nemotron)", 40, False, BLUE),
             ("", 20, False, INK),
             ("Code, results and how to run it:", 38, False, MUTED),
-            ("github.com/Garvit-01/nvidia_nebius_challenge_ws", 40, True, INK),
+            ("github.com/Garvit-01/ai-robot-quality-inspector", 40, True, INK),
         ], 8, top=290)
 
         listing = t / "list.txt"

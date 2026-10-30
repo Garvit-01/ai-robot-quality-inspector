@@ -118,8 +118,8 @@ spend on another fine-tune for it.
 | Fine-tuning (`finetune/`) | a GPU VM; we used one H100 80 GB on Nebius AI Cloud |
 
 ```bash
-git clone https://github.com/Garvit-01/nvidia_nebius_challenge_ws.git
-cd nvidia_nebius_challenge_ws
+git clone https://github.com/Garvit-01/ai-robot-quality-inspector.git
+cd ai-robot-quality-inspector
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env          # add your Nebius Token Factory key and model IDs
