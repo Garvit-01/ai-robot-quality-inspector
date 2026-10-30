@@ -1,0 +1,115 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Diagrams</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<style>
+/* Source of docs/arch_*.png. Render: .venv/bin/python scripts/render_diagrams.py */
+:root {
+  --ink: #16202b; --muted: #5a6776; --line: #d5dde6; --paper: #ffffff; --ground: #f3f6f9;
+  --nv: #76b900; --nv-deep: #3f6400; --nv-soft: #eef7dc;
+  --neb: #6b4fb0; --neb-soft: #efeafb;
+  --local: #2f6fb3; --local-soft: #e7f0fa;
+  --bad: #c0432f; --bad-soft: #fbe6e2; --good: #1f8a4c; --good-soft: #e1f4e8;
+  --amber: #b9821a; --amber-soft: #fdf3dc;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: #888; font-family: Inter, "Segoe UI", Arial, sans-serif; color: var(--ink); }
+.diagram { width: 1600px; background: var(--paper); padding: 48px 56px 52px; margin: 0 0 40px; border-radius: 28px; }
+.eyebrow { font-size: 18px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 40px; font-weight: 800; margin: 8px 0 30px; letter-spacing: -.01em; }
+.row { display: flex; align-items: stretch; gap: 0; }
+.card { flex: 1; border-radius: 20px; padding: 24px 24px 26px; border: 2px solid var(--line); background: var(--paper); display: flex; flex-direction: column; gap: 10px; }
+.card .k { font-size: 15px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.card .t { font-size: 25px; font-weight: 700; line-height: 1.2; }
+.card .d { font-size: 18px; line-height: 1.45; color: var(--muted); }
+.arrow { flex: 0 0 64px; display: flex; align-items: center; justify-content: center; }
+.arrow svg { width: 52px; height: 30px; }
+.nv { background: var(--nv-soft); border-color: var(--nv); } .nv .k { color: var(--nv-deep); }
+.neb { background: var(--neb-soft); border-color: var(--neb); } .neb .k { color: var(--neb); }
+.local { background: var(--local-soft); border-color: var(--local); } .local .k { color: var(--local); }
+.good { background: var(--good-soft); border-color: var(--good); } .good .k { color: var(--good); }
+.bad { background: var(--bad-soft); border-color: var(--bad); } .bad .k { color: var(--bad); }
+.amber { background: var(--amber-soft); border-color: var(--amber); } .amber .k { color: var(--amber); }
+.tag { align-self: flex-start; font-size: 14px; font-weight: 700; padding: 5px 11px; border-radius: 99px; color: #fff; }
+.tag.nv { background: var(--nv-deep); } .tag.neb { background: var(--neb); } .tag.local { background: var(--local); }
+.num { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 20px; color: #fff; }
+
+/* 1: at a glance */
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 30px; }
+.cmp { border-radius: 20px; padding: 22px 26px; display: flex; align-items: center; gap: 22px; border: 2px solid; }
+.cmp .big { font-size: 54px; font-weight: 800; letter-spacing: -.02em; white-space: nowrap; }
+.cmp .lbl { font-size: 20px; line-height: 1.4; }
+.cmp .lbl b { display: block; font-size: 22px; }
+
+/* 2: live loop */
+.loop { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 64px; position: relative; }
+.loop .card { position: relative; }
+.loop .card:not(.last)::after { content: ""; position: absolute; right: -48px; top: 50%; width: 32px; height: 4px; background: var(--muted); border-radius: 2px; }
+.loop .card:not(.last)::before { content: ""; position: absolute; right: -52px; top: calc(50% - 8px); border: 10px solid transparent; border-left: 12px solid var(--muted); border-right: 0; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 30px; }
+.down { display: flex; justify-content: center; margin: 14px 0 0; }
+.down svg { width: 30px; height: 40px; }
+.side { margin-top: 26px; display: flex; gap: 22px; align-items: stretch; }
+.side .card { flex: 1; }
+</style></head><body>
+
+<!-- 1. At a glance -->
+<section class="diagram" id="overview">
+  <div class="eyebrow">AI Robot Quality Inspector · at a glance</div>
+  <h1>Today's robot cell can't see a bad part. Ours checks every nut, explains why, and sorts it.</h1>
+  <div class="row">
+    <div class="card local"><div class="num" style="background:var(--local)">1</div><span class="k">See</span><span class="t">Photograph every nut, top <i>and</i> underside</span><span class="d">A robot arm in NVIDIA Isaac Sim holds each nut under two cameras. Damage underneath is invisible from above.</span></div>
+    <div class="arrow"><svg viewBox="0 0 52 30"><path d="M2 15h40M34 5l12 10-12 10" stroke="#5a6776" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="card nv"><div class="num" style="background:var(--nv-deep)">2</div><span class="k">Understand</span><span class="t">NVIDIA Cosmos-Reason1-7B, fine-tuned by us</span><span class="d">Says <b>good</b>, <b>wrong part</b> or <b>damaged</b>, with a written reason. Trained on a Nebius H100, runs on one small GPU.</span></div>
+    <div class="arrow"><svg viewBox="0 0 52 30"><path d="M2 15h40M34 5l12 10-12 10" stroke="#5a6776" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="card amber"><div class="num" style="background:var(--amber)">3</div><span class="k">Act</span><span class="t">Good → rack. Bad → scrap bin.</span><span class="d">Rejected if either camera sees a wrong part or damage. An operator screen shows every decision and its reason.</span></div>
+    <div class="arrow"><svg viewBox="0 0 52 30"><path d="M2 15h40M34 5l12 10-12 10" stroke="#5a6776" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="card good"><div class="num" style="background:var(--good)">4</div><span class="k">Assemble</span><span class="t">Good nuts get threaded onto a bolt</span><span class="d">NVIDIA's pretrained Isaac Lab policy: 47 of 48 threaded. It can't see, so the inspector decides what reaches it.</span></div>
+  </div>
+  <div class="compare">
+    <div class="cmp bad"><span class="big" style="color:var(--bad)">120 / 120</span><span class="lbl"><b>Today's cell ships every bad nut</b>gripper sensor only: "a part is in my hand"</span></div>
+    <div class="cmp good"><span class="big" style="color:var(--good)">24 / 120</span><span class="lbl"><b>Ours, on 40 trays it never saw</b>61 with the top camera alone; 240 / 240 nuts placed correctly</span></div>
+  </div>
+</section>
+
+<!-- 2. Live loop -->
+<section class="diagram" id="live">
+  <div class="eyebrow">The live robot loop · what happens to each nut</div>
+  <h1>Pick → inspect from two sides → decide with a reason → sort</h1>
+  <div class="loop">
+    <div class="card local"><span class="k">1 · Feed tray</span><span class="t">6 parts per tray</span><span class="d">Good M16 nuts, wrong sizes (M12, M20, an M16 bolt) and nuts with chips, cracks or rust on the top or underside.</span></div>
+    <div class="card local"><span class="k">2 · Top camera</span><span class="t">UR10 sets the part on the inspection nest</span><span class="d">Suction gripper, real physics. Photo from above.</span></div>
+    <div class="card local"><span class="k">3 · Underside camera</span><span class="t">Arm lifts it over an upward camera</span><span class="d">Photo from below: catches cracks and rust the top camera can't see.</span></div>
+    <div class="card nv last"><span class="k">4 · Inspector</span><span class="t">Cosmos-Reason1-7B + our LoRA</span><span class="d">4-bit on the same T4 as the simulator. One answer per photo: verdict + reason.</span></div>
+  </div>
+  <div class="down"><svg viewBox="0 0 30 40"><path d="M15 2v30M5 24l10 12 10-12" stroke="#5a6776" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  <div class="split">
+    <div class="card bad"><span class="k">Either view: wrong part or damaged</span><span class="t">→ Scrap bin</span><span class="d">e.g. "A thin dark crack runs across the nut's bottom face."</span></div>
+    <div class="card good"><span class="k">Both views: OK</span><span class="t">→ Good-parts rack → NVIDIA threading policy</span><span class="d">Isaac Lab NutThread screws it onto an M16 bolt (47 / 48).</span></div>
+  </div>
+  <div class="side">
+    <div class="card neb" style="flex:1.4"><span class="k">Operator screen</span><span class="t">Live tally vs today's factory, both photos, every reason</span><span class="d">"Inject a fault" swaps the next nut for a chosen defect mid-run, to watch the cell react.</span></div>
+    <div class="card" style="background:var(--ground)"><span class="k" style="color:var(--muted)">Measured on</span><span class="t">40 unseen trays, 240 nuts</span><span class="d">Every decision is scored against the answer key the simulator wrote.</span></div>
+  </div>
+</section>
+
+<!-- 3. Where it runs -->
+<section class="diagram" id="build">
+  <div class="eyebrow">How it was built · where each part runs</div>
+  <h1>Simulated photos → fine-tune on Nebius → run beside the robot</h1>
+  <div class="row">
+    <div class="card local"><span class="tag local">Local GPU · Tesla T4</span><span class="t">Make labelled photos</span><span class="d">NVIDIA Isaac Sim renders scenes and trays with NVIDIA's M16 nut meshes. The right answer is written with every photo: no hand-labelling.</span></div>
+    <div class="arrow"><svg viewBox="0 0 52 30"><path d="M2 15h40M34 5l12 10-12 10" stroke="#5a6776" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="card neb"><span class="tag neb">Nebius AI Cloud · 1× H100</span><span class="t">Teach the inspector</span><span class="d">LoRA fine-tune of NVIDIA Cosmos-Reason1-7B on ~6,000 photos + answers (~2 h per run). Out comes a ~200 MB adapter.</span></div>
+    <div class="arrow"><svg viewBox="0 0 52 30"><path d="M2 15h40M34 5l12 10-12 10" stroke="#5a6776" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="card local"><span class="tag local">Local GPU · Tesla T4</span><span class="t">Run the line</span><span class="d">Isaac Sim robot + the inspector (4-bit, 6 GB) side by side. NVIDIA Isaac Lab runs the pretrained threading policy.</span></div>
+    <div class="arrow"><svg viewBox="0 0 52 30"><path d="M2 15h40M34 5l12 10-12 10" stroke="#5a6776" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="card neb"><span class="tag neb">Nebius Token Factory</span><span class="t">Plan &amp; compare</span><span class="d">NVIDIA Nemotron picks a recovery from 5 safe actions (code guardrails overrule it). Same test run on Token Factory's vision models.</span></div>
+  </div>
+  <div class="compare" style="grid-template-columns:repeat(3,1fr)">
+    <div class="cmp nv" style="border-color:var(--nv)"><span class="lbl"><b>NVIDIA</b>Isaac Sim · Isaac Lab · Cosmos-Reason1-7B · Nemotron</span></div>
+    <div class="cmp neb" style="border-color:var(--neb)"><span class="lbl"><b>Nebius</b>AI Cloud (H100 fine-tuning) · Token Factory (Nemotron)</span></div>
+    <div class="cmp local" style="border-color:var(--local)"><span class="lbl"><b>Why not fine-tune on Token Factory?</b>It fine-tunes and hosts text models only; the inspector must see photos.</span></div>
+  </div>
+</section>
+</body></html>

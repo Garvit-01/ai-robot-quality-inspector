@@ -14,6 +14,19 @@ good nuts to the rack (and on to NVIDIA's threading policy), bad ones to the bin
 > **240/240** nuts where it meant to. NVIDIA's pretrained Isaac Lab policy then threads
 > **47/48** nuts onto an M16 bolt. Limitations are stated below, including the ones that hurt.
 
+## In 30 seconds
+
+- **What:** a robot cell that checks every nut from above *and* below with a fine-tuned NVIDIA
+  vision model, says what's wrong in plain words, and sorts it: good nuts on to assembly, bad ones
+  to the bin.
+- **Why:** today's robot cells only know "a part is in my gripper", so a cracked, rusted or
+  wrong-size nut gets shipped, and damage underneath is invisible even to a camera looking down.
+- **How:** NVIDIA Isaac Sim makes labelled training photos for free → we fine-tune NVIDIA
+  Cosmos-Reason1-7B on a Nebius AI Cloud H100 → it runs on one small GPU next to the simulated
+  robot → NVIDIA's pretrained Isaac Lab policy threads the good nuts.
+
+![At a glance: see, understand, act, assemble; today's cell ships 120 of 120 bad nuts, ours 24](docs/arch_overview.png)
+
 ---
 
 ## The problem
@@ -31,66 +44,13 @@ cannot pay for that.
 
 **One general inspector instead of N hand-written checks**, running next to the robot.
 
-### How it works, live
+### The live robot loop
 
-```mermaid
-flowchart TB
-    tray["🔩 Feed tray<br/>6 parts: good M16 nuts,<br/>wrong sizes, damaged"]:::sim
-    arm["🦾 UR10 arm + suction<br/>Isaac Sim"]:::sim
-    top["📷 Top camera<br/>on the inspection nest"]:::cam
-    under["📷 Underside camera<br/>looks up at the part"]:::cam
-    ai["🧠 NVIDIA Cosmos-Reason1-7B<br/>+ our LoRA, 4-bit on one T4<br/>good / wrong part / damaged<br/>+ a written reason"]:::nvidia
-    rule{"Either view says<br/>wrong or damaged?"}:::rule
-    bin["🗑️ Scrap bin"]:::bad
-    rack["✅ Good-parts rack"]:::good
-    thread["🔧 NVIDIA Isaac Lab<br/>NutThread policy<br/>threads it onto an M16 bolt"]:::nvidia
-    screen["🖥️ Operator screen<br/>tally, photos, reasons,<br/>Inject a fault"]:::ui
-
-    tray --> arm --> top --> under
-    top -- photo --> ai
-    under -- photo --> ai
-    ai --> rule
-    rule -- yes --> bin
-    rule -- no --> rack --> thread
-    ai -. verdicts .-> screen
-    screen -. injected fault .-> tray
-
-    classDef sim fill:#e8f1fb,stroke:#2f6fb3,color:#14324f
-    classDef cam fill:#eef7ee,stroke:#3d8b4f,color:#173d20
-    classDef nvidia fill:#76b900,stroke:#4d7a00,color:#0b1a00
-    classDef rule fill:#fff4d6,stroke:#c7962c,color:#4a3600
-    classDef bad fill:#fde3df,stroke:#c0432f,color:#5a160c
-    classDef good fill:#dff5e6,stroke:#24804f,color:#0d3a20
-    classDef ui fill:#efe8fb,stroke:#6b4fb0,color:#2b1a52
-```
+![The live robot loop: feed tray, top camera, underside camera, NVIDIA Cosmos inspector, then scrap bin or good-parts rack and threading](docs/arch_live_loop.png)
 
 ### How it was built, and where each part runs
 
-```mermaid
-flowchart LR
-    subgraph aws["💻 Local GPU · Tesla T4"]
-        sim["NVIDIA Isaac Sim 5.1<br/>renders scenes + trays<br/>with the answer key"]:::sim
-        run["Sorting line + inspector<br/>4-bit, served on :8765"]:::sim
-        lab["NVIDIA Isaac Lab 2.3.2<br/>NutThread evaluation"]:::sim
-    end
-    subgraph cloud["☁️ Nebius AI Cloud · 1× H100"]
-        ft["LoRA fine-tune of<br/>NVIDIA Cosmos-Reason1-7B<br/>~6,000 labelled photos"]:::nebius
-    end
-    subgraph tf["⚡ Nebius Token Factory"]
-        nemo["NVIDIA Nemotron<br/>recovery planner<br/>tool calling"]:::nebius
-        cmp["Vision-model comparison<br/>same test, same scorer"]:::nebius
-    end
-    sim -- "photos + right answers" --> ft
-    ft -- "adapter (~200 MB)" --> run
-    run -- "verdicts" --> nemo
-    sim -- "held-out scenes" --> cmp
-
-    classDef sim fill:#e8f1fb,stroke:#2f6fb3,color:#14324f
-    classDef nebius fill:#efe8fb,stroke:#6b4fb0,color:#2b1a52
-    style aws fill:#f6f9fc,stroke:#2f6fb3
-    style cloud fill:#f8f5fd,stroke:#6b4fb0
-    style tf fill:#f8f5fd,stroke:#6b4fb0
-```
+![Where it runs: labelled photos from Isaac Sim on a local T4, fine-tuning on a Nebius AI Cloud H100, the line on the T4, Nemotron on Nebius Token Factory](docs/arch_where_it_runs.png)
 
 - **The sorting line** (`isaac/run_sorting.py`): a UR10 with a suction gripper, real physics,
   NVIDIA's M16 nut / bolt meshes, trays of 6 parts with chips, cracks and rust **on the top or
