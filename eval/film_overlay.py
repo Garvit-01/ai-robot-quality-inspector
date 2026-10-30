@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 W, H = 1920, 1080
@@ -59,10 +60,40 @@ def truth(r: dict) -> str:
     return f"{r['defect']} on the {r['side']}"
 
 
+def wide_view_pixel(p):
+    """Where a world point appears in the 1280x720 wide view. Must match run_sorting.py's film
+    camera: FILM_EYE, FILM_TARGET, 14 mm lens, 20.955 mm aperture."""
+    eye, target = np.array([1.45, -0.05, 1.05]), np.array([0.33, -0.03, 0.18])
+    fwd = (target - eye) / np.linalg.norm(target - eye)
+    right = np.cross(fwd, [0, 0, 1]); right /= np.linalg.norm(right)
+    up = np.cross(right, fwd)
+    d, f = np.asarray(p) - eye, 1280 * 14 / 20.955
+    return 640 + f * d.dot(right) / d.dot(fwd), 360 - f * d.dot(up) / d.dot(fwd)
+
+
+# The cameras are invisible sensors in Isaac Sim; mark where they are in the wide view.
+# Top camera: ~11 cm in front of and 9 cm above the inspection nest (partsets.FASTENER
+# closeup_offset); underside camera: run_sorting.UNDER_CAM, on the table, looking up.
+CAMERA_LABELS = (("TOP CAMERA", (0.53, -0.26, 0.113), (150, 590)),
+                 ("UNDERSIDE CAMERA (looks up)", (0.30, 0.02, 0.004), (860, 300)))
+
+
+def label_cameras(d: ImageDraw.ImageDraw) -> None:
+    for text, world, (lx, ly) in CAMERA_LABELS:
+        x, y = wide_view_pixel(world)
+        tw = d.textlength(text, font=font(22, True))
+        anchor = (lx + tw / 2, ly) if ly < y else (lx + tw / 2, ly + 40)
+        d.line((anchor, (x, y)), fill=WARN, width=3)
+        d.ellipse((x - 11, y - 11, x + 11, y + 11), outline=WARN, width=4)
+        d.rounded_rectangle((lx - 12, ly, lx + tw + 12, ly + 40), radius=8, fill=(0, 0, 0))
+        d.text((lx, ly + 7), text, font=font(22, True), fill=WARN)
+
+
 def compose(frame: Image.Image, state: dict) -> Image.Image:
     canvas = Image.new("RGB", (W, H), BG)
     canvas.paste(frame.resize((1280, 720)), (0, 0))
     d = ImageDraw.Draw(canvas)
+    label_cameras(d)
 
     # Right column: the two inspection photos of the current part.
     for i, (key, title) in enumerate((("top", "TOP CAMERA"), ("under", "UNDERSIDE CAMERA"))):
