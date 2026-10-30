@@ -132,7 +132,7 @@ spend on another fine-tune for it.
 | 4 more vision models on Token Factory (MiniMax-M3, Kimi-K3, DeepSeek-V4.1-Flash, Qwen3.8-27B) + NVIDIA Nemotron-Nano-12B-v2-VL | best untrained: MiniMax-M3, 75.8% | fine-tuned instead |
 | **Fine-tuning NVIDIA Cosmos-Reason1-7B** (LoRA, 1,800 scenes, 97 min on a Nebius H100) | **21.7% → 94.2%**; 93.3% in 4-bit on a T4; 0 of 60 bad parts shipped | made it the inspector |
 | 4 NVIDIA Nemotron sizes as the recovery planner vs a fixed lookup table | identical decisions on all 180 scenes | the robot uses the table; we say so |
-| The Oct 12 model inside the robot cell | rejected most good nuts (new arm, shadows, underside view) | |
+| The first fine-tuned model inside the robot cell | rejected most good nuts (new arm, shadows, underside view) | |
 | Relighting the robot cell like the training photos | good nuts accepted 0/9 → only 2/9 | retrained instead |
 | **Retrain on 2,400 robot-cell photos**, two variants (Nebius H100) | full LoRA: 82% top / 87% underside; vision frozen: 49% / 67% | kept the full LoRA |
 | 4-bit vs 8-bit on the T4 | 4-bit scores the same as the H100 and is faster | 4-bit beside Isaac Sim |
@@ -316,15 +316,12 @@ Stated up front because they are the honest frame for every number here.
 
 ## Provenance
 
-**This repository is new for the hackathon.** Its first commit is October 10, 2026, and
-everything in it was built after that: the fault staging and ground-truth generation (cubes,
-then NVIDIA's M16 nuts and bolts with chips, cracks and rust), the VLM inspector and its
-sensor-fusion rules, the recovery planner and the code-level guardrails, the LoRA fine-tuning
+**Built during the hackathon.** Everything in this repository was created for it: the fault and
+tray generation (NVIDIA's M16 nuts and bolts with chips, cracks and rust), the VLM inspector and
+its sensor-fusion rules, the recovery planner and code-level guardrails, the LoRA fine-tuning
 pipeline, the evaluation harness, the UR10 sorting line with top and underside inspection, the
-operator screen, and the threading evaluation. The dated commit history shows this.
+operator screen, and the threading evaluation.
 
-**Related earlier work, not reused here.** Before the hackathon (July–September 2026) the
-author built a separate UR5e + Robotiq pick-and-place cell with MoveIt2 and AprilTag perception,
-in the repository [`ur5e-vision-pick-place`](https://github.com/Garvit-01/ur5e-vision-pick-place).
-It motivated this project (that cell's only check is the gripper sensor), but no code, scenes or
-configuration from it are used in this repository.
+**Related earlier work.** The idea came from a separate UR5e + Robotiq pick-and-place cell the
+author built earlier ([`ur5e-vision-pick-place`](https://github.com/Garvit-01/ur5e-vision-pick-place)),
+whose only check is the gripper sensor. No code, scenes or configuration from it are used here.
