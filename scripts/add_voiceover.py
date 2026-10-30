@@ -6,7 +6,7 @@ before that part's decision appears. PIECES are (start, end) in the recording, f
 transcribing it with word timestamps, and where each goes: a segment of the video plus an
 offset in seconds. The recording itself is not in the repository.
 
-    .venv/bin/python scripts/add_voiceover.py --voice recording.m4a --out final.mp4
+    .venv/bin/python scripts/add_voiceover.py --voice final_take.m4a --voice-old earlier_take.m4a --out final.mp4
 """
 from __future__ import annotations
 
@@ -20,9 +20,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import make_submission_video as M  # noqa: E402
 
 SPEED = 1.45  # the sorting footage, so the whole video stays under 3 minutes
-CARD_SECS = {"title": 4.0, "problem": 18.8, "how": 18.6, "live1": 4.6, "thread_intro": 6.0,
-             "results": 12.0, "honest": 8.5, "end": 9.2}
+CARD_SECS = {"title": 3.0, "problem": 15.6, "how": 19.3, "live1": 6.8, "thread_intro": 5.6,
+             "results": 12.0, "honest": 8.0, "end": 9.0}
+# Final take (Oct 30, 3:24 a.m. recording = "new"), with two sections from the earlier take ("old"):
+# the new take stumbles on "Here it is, running live" and on the results sentence. Pieces are
+# (start, end, segment, offset, source). Footage events (s into the footage, SPEED 1.45): crack top 7.1,
+# underside 10.7, decision 12.4; M12 decision 25.4; M20 38.2; good M16 51.1; bolt 63.4; last nut 76.2.
 PIECES = [
+    (1.0, 2.6, "title", 0.3, "new"),             # "Hi, I'm Garvit Katyal."
+    (6.15, 20.95, "problem", 0.3, "new"),        # skips the spoken heading before "Most factory robots"
+    (23.1, 41.8, "how", 0.3, "new"),             # skips "So how it works?"
+    (40.1, 44.3, "live1", 0.3, "old"),           # "Here it is, running live. The AI decides every nut."
+    (48.55, 55.6, "live1", 4.85, "new"),         # "An operator has just injected a fault..." (runs into the footage)
+    (56.0, 58.36, "footage", 5.45, "new"),       # "...under the top camera" ~ top photo 7.1
+    (58.40, 62.10, "footage", 8.65, "new"),       # "...over the second camera" ~ underside photo 10.7
+    (63.50, 66.42, "footage", 12.55, "new"),      # "From the top it looks perfect..." (decision 12.4)
+    (66.92, 71.50, "footage", 15.67, "new"),     # "...but from below it sees a crack... scrap bin"
+    (72.10, 72.65, "footage", 20.6, "new"),      # "Next,"
+    (73.22, 76.15, "footage", 21.35, "new"),     # "an M12 nut, too small for this job."
+    (76.75, 81.95, "footage", 24.48, "new"),     # "...flags it as the wrong part" (decision 25.4)
+    (82.95, 86.50, "footage", 36.24, "new"),     # M20 "wrong part again" (decision 38.2)
+    (88.05, 93.20, "footage", 47.58, "new"),     # good M16 "both cameras say OK... green rack" (decision 51.1)
+    (94.45, 97.50, "footage", 61.2, "new"),      # bolt "rejected" (decision 63.4)
+    (97.80, 99.90, "footage", 75.12, "new"),     # "One more good nut: accepted." (decision 76.2)
+    (100.45, 105.70, "footage", 77.45, "new"),   # "Every decision comes with a written reason..." (runs into the card)
+    (106.40, 107.40, "thread_intro", 2.85, "new"),   # "Good nuts"
+    (108.20, 125.65, "thread_intro", 4.1, "new"),    # "...47 out of 48..." inside the threading clip
+    (117.9, 129.3, "results", 0.3, "old"),       # results sentence
+    (139.5, 146.55, "honest", 0.3, "new"),
+    (150.65, 155.95, "end", 0.3, "new"),         # clean retake of the closing line (hesitant take dropped)
+    (157.85, 159.70, "end", 6.05, "new"),        # "The code is on GitHub. Thanks for watching." (a click before it dropped)
+]
+# Pieces for the earlier take alone (Oct 30, 1:49 a.m.), with its card durations, kept for reference:
+CARD_SECS_OLD = {"title": 4.0, "problem": 18.8, "how": 18.6, "live1": 4.6, "thread_intro": 6.0,
+                 "results": 12.0, "honest": 8.5, "end": 9.2}
+PIECES_OLD = [
     (0.0, 3.4, "title", 0.3),          # introduction
     (3.55, 21.8, "problem", 0.3),
     (21.9, 40.0, "how", 0.3),
@@ -48,7 +80,8 @@ def duration(path: Path) -> float:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--voice", type=Path, required=True)
+    ap.add_argument("--voice", type=Path, required=True, help="the final take (pieces marked 'new')")
+    ap.add_argument("--voice-old", type=Path, help="the earlier take (pieces marked 'old')")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
     parts: list[tuple[str, float]] = []
@@ -73,14 +106,25 @@ def main() -> None:
         for name, secs in parts:
             starts[name], clock = clock, clock + secs
         filters, labels = [], []
-        for i, (a, b, seg, off) in enumerate(PIECES):
+        inputs = {"new": (1, args.voice), "old": (2, args.voice_old)}
+        used = {src: [i for i, pc in enumerate(PIECES) if pc[4] == src] for src in inputs}
+        for src, (idx, path) in inputs.items():
+            if not used[src]:
+                continue
+            assert path, f"pieces use the {src} recording: pass --voice-old"
+            # each recording is loudness-normalised on its own first, so the two takes sound alike
+            outs = "".join(f"[s{i}]" for i in used[src])
+            filters.append(f"[{idx}:a]aformat=channel_layouts=mono,loudnorm=I=-16:TP=-2:LRA=11,aresample=48000,"
+                           f"asplit={len(used[src])}{outs}")
+        for i, (a, b, seg, off, _src) in enumerate(PIECES):
             at = int((starts[seg] + off) * 1000)
-            filters.append(f"[1:a]atrim={a}:{b},asetpts=PTS-STARTPTS,adelay={at}|{at}[p{i}]")
+            filters.append(f"[s{i}]atrim={a}:{b},asetpts=PTS-STARTPTS,adelay={at}|{at}[p{i}]")
             labels.append(f"[p{i}]")
         filters.append("".join(labels) + f"amix=inputs={len(labels)}:normalize=0,aformat=channel_layouts=mono,"
                        "highpass=f=70,loudnorm=I=-16:TP=-2:LRA=11,alimiter=limit=0.79:level=false,"
                        f"apad,atrim=0:{clock:.2f}[a]")
         subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(silent), "-i", str(args.voice),
+                        *(["-i", str(args.voice_old)] if args.voice_old else []),
                         "-filter_complex", ";".join(filters), "-map", "0:v", "-map", "[a]",
                         "-c:v", "libx264", "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p", "-crf", "20",
                         "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", str(args.out)],
