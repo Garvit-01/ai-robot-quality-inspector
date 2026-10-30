@@ -316,18 +316,15 @@ Stated up front because they are the honest frame for every number here.
 
 ## Provenance
 
-This project builds on an **existing** robot cell rather than starting from nothing, and the
-split matters, so here it is explicitly.
+**This repository is new for the hackathon.** Its first commit is October 10, 2026, and
+everything in it was built after that: the fault staging and ground-truth generation (cubes,
+then NVIDIA's M16 nuts and bolts with chips, cracks and rust), the VLM inspector and its
+sensor-fusion rules, the recovery planner and the code-level guardrails, the LoRA fine-tuning
+pipeline, the evaluation harness, the UR10 sorting line with top and underside inspection, the
+operator screen, and the threading evaluation. The dated commit history shows this.
 
-**Pre-existing.** The UR5e + Robotiq 2F-85 pick-and-place cell — MoveIt2 configuration,
-combined URDF, `apriltag_ros` perception off an Isaac Sim camera, and TF-based pose lookup —
-was built between **July and September 2026**, beginning before this hackathon's submission
-period opened on August 26, 2026. It lives in a separate repository,
-[`ur5e-vision-pick-place`](https://github.com/Garvit-01/ur5e-vision-pick-place). Scene,
-launch, and configuration files reused here are noted where they appear.
-
-**New for this hackathon**, all of it after October 10, 2026: the fault staging and
-ground-truth generation (cubes, then NVIDIA's M16 nuts and bolts with chips, cracks and rust),
-the VLM verifier and its sensor-fusion rules, the recovery planner and the code-level
-guardrails, the LoRA fine-tuning pipeline, the evaluation harness, the UR10 sorting line with top and underside inspection, the operator screen, and the threading evaluation. The dated commit history of both repositories
-reflects this.
+**Related earlier work, not reused here.** Before the hackathon (July–September 2026) the
+author built a separate UR5e + Robotiq pick-and-place cell with MoveIt2 and AprilTag perception,
+in the repository [`ur5e-vision-pick-place`](https://github.com/Garvit-01/ur5e-vision-pick-place).
+It motivated this project (that cell's only check is the gripper sensor), but no code, scenes or
+configuration from it are used in this repository.
