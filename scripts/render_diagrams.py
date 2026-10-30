@@ -8,7 +8,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 DOCS = Path(__file__).resolve().parent.parent / "docs"
-SECTIONS = {"overview": "arch_overview.png", "live": "arch_live_loop.png", "build": "arch_where_it_runs.png"}
+SECTIONS = {"overview": "arch_overview.png", "live": "arch_live_loop.png", "build": "arch_where_it_runs.png",
+            "models": "model_comparison.png"}
 
 with sync_playwright() as p:
     browser = p.chromium.launch()

@@ -51,6 +51,16 @@ h1 { font-size: 40px; font-weight: 800; margin: 8px 0 30px; letter-spacing: -.01
 .down svg { width: 30px; height: 40px; }
 .side { margin-top: 26px; display: flex; gap: 22px; align-items: stretch; }
 .side .card { flex: 1; }
+
+.bars { display: grid; gap: 14px; }
+.br { display: grid; grid-template-columns: 520px 1fr; align-items: center; gap: 24px; }
+.bl b { display: block; font-size: 22px; font-weight: 700; }
+.bl span { font-size: 16px; color: var(--muted); }
+.bt { position: relative; height: 44px; background: var(--ground); border-radius: 10px; }
+.bf { height: 100%; border-radius: 10px; background: #b7c2cd; }
+.bf.ours { background: var(--nv); } .bf.nvraw { background: #a9c97a; }
+.bv { position: absolute; top: 50%; transform: translateY(-50%); font-size: 22px; font-weight: 800; margin-left: 12px; color: var(--ink); }
+.note { margin-top: 26px; font-size: 18px; color: var(--muted); line-height: 1.5; max-width: 1400px; }
 </style></head><body>
 
 <!-- 1. At a glance -->
@@ -111,5 +121,21 @@ h1 { font-size: 40px; font-weight: 800; margin: 8px 0 30px; letter-spacing: -.01
     <div class="cmp neb" style="border-color:var(--neb)"><span class="lbl"><b>Nebius</b>AI Cloud (H100 fine-tuning) · Token Factory (Nemotron)</span></div>
     <div class="cmp local" style="border-color:var(--local)"><span class="lbl"><b>Why not fine-tune on Token Factory?</b>It fine-tunes and hosts text models only; the inspector must see photos.</span></div>
   </div>
+</section>
+
+<!-- 4. Model comparison -->
+<section class="diagram" id="models">
+  <div class="eyebrow">Which model can see what's wrong? · same 120 held-out scenes, same prompt, same scorer</div>
+  <h1>Fine-tuning took NVIDIA Cosmos from 21.7% to 94.2%, past every untrained model we tried</h1>
+  <div class="bars"><div class="br"><div class="bl"><b>NVIDIA Cosmos-Reason1-7B + our LoRA</b><span>fine-tuned · H100</span></div><div class="bt"><div class="bf ours" style="width:94.2%"></div><span class="bv ours" style="left:94.2%">94.2%</span></div></div>
+<div class="br"><div class="bl"><b>… same model, 4-bit on one T4</b><span>fine-tuned · runs beside the robot</span></div><div class="bt"><div class="bf ours" style="width:93.3%"></div><span class="bv ours" style="left:93.3%">93.3%</span></div></div>
+<div class="br"><div class="bl"><b>MiniMax-M3</b><span>untrained · Token Factory</span></div><div class="bt"><div class="bf other" style="width:75.8%"></div><span class="bv other" style="left:75.8%">75.8%</span></div></div>
+<div class="br"><div class="bl"><b>Kimi-K3</b><span>untrained · Token Factory</span></div><div class="bt"><div class="bf other" style="width:72.5%"></div><span class="bv other" style="left:72.5%">72.5%</span></div></div>
+<div class="br"><div class="bl"><b>DeepSeek-V4.1-Flash</b><span>untrained · Token Factory</span></div><div class="bt"><div class="bf other" style="width:68.3%"></div><span class="bv other" style="left:68.3%">68.3%</span></div></div>
+<div class="br"><div class="bl"><b>Qwen3.8-27B</b><span>untrained · Token Factory</span></div><div class="bt"><div class="bf other" style="width:66.7%"></div><span class="bv other" style="left:66.7%">66.7%</span></div></div>
+<div class="br"><div class="bl"><b>Gemma 3 27B</b><span>untrained · Token Factory · our first verifier</span></div><div class="bt"><div class="bf other" style="width:48.3%"></div><span class="bv other" style="left:48.3%">48.3%</span></div></div>
+<div class="br"><div class="bl"><b>NVIDIA Nemotron-Nano-12B-v2-VL</b><span>untrained · Nebius H100</span></div><div class="bt"><div class="bf nvraw" style="width:38.3%"></div><span class="bv nvraw" style="left:38.3%">38.3%</span></div></div>
+<div class="br"><div class="bl"><b>NVIDIA Cosmos-Reason1-7B</b><span>untrained · the starting point</span></div><div class="bt"><div class="bf nvraw" style="width:21.7%"></div><span class="bv nvraw" style="left:21.7%">21.7%</span></div></div></div>
+  <div class="note">Correct answers on 120 simulated scenes never used for training (wrong-size nuts, a bolt, chips, cracks, rust, dropped or crooked parts, clean parts). Untrained models can't tell an M16 nut from an M12 or M20 and miss small chips; a rewritten prompt didn't change that.</div>
 </section>
 </body></html>

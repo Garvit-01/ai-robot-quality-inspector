@@ -103,6 +103,14 @@ Same nuts, same photos, same verdicts; three ways of deciding (`eval/bench_sorti
 NVIDIA's pretrained NutThread policy, 16 environments × 3 rounds: **47 / 48 threaded (97.9%)**,
 using the task's own physics success check.
 
+### Which model can see what's wrong? (9 compared)
+
+Before building the robot line we measured every candidate on the same 120 held-out scenes,
+with the same prompt and the same scorer. Details and the full tables are in
+[the first-stage section](#the-first-stage-single-scene-benchmark-4-checkpoints-nemotron-planner) below.
+
+![Correct answers on 120 held-out scenes: our fine-tuned Cosmos 94.2% (93.3% in 4-bit), MiniMax-M3 75.8%, Kimi-K3 72.5%, DeepSeek-V4.1-Flash 68.3%, Qwen3.8-27B 66.7%, Gemma 3 27B 48.3%, Nemotron-Nano-12B-v2-VL 38.3%, untrained Cosmos 21.7%](docs/model_comparison.png)
+
 ### A plain CNN baseline (we checked, and it matters)
 
 A ResNet-18 trained on the same 2,400 robot-cell photos is **about as accurate** as our inspector
@@ -114,6 +122,23 @@ the cell with one model, and takes a new question in plain language.
 We also tried to fix chips for free on the CNN first: 300 extra chip photos and a 2× zoom on the
 nut. At an equal false-alarm rate neither helped (chips shipped 16/20 → 15–18/20), so we did not
 spend on another fine-tune for it.
+
+### Everything we tried, including what didn't work
+
+| What we tried | Result | What we did next |
+|---|---|---|
+| **Gemma 3 27B**, untrained, as the first verifier (Token Factory) | 48.3% correct; bad parts shipped 60 → 44 of 60 | looked for a better model |
+| A rewritten prompt aimed at nut sizes and chips | no change (0/6 wrong sizes, 0/4 chips on dev) | concluded it's a seeing problem, not a wording one |
+| 6 more vision models on Token Factory + NVIDIA Nemotron-Nano-12B-v2-VL | best untrained: MiniMax-M3, 75.8% | fine-tuned instead |
+| **Fine-tuning NVIDIA Cosmos-Reason1-7B** (LoRA, 1,800 scenes, 97 min on a Nebius H100) | **21.7% → 94.2%**; 93.3% in 4-bit on a T4; 0 of 60 bad parts shipped | made it the inspector |
+| 4 NVIDIA Nemotron sizes as the recovery planner vs a fixed lookup table | identical decisions on all 180 scenes | the robot uses the table; we say so |
+| The Oct 12 model inside the robot cell | rejected most good nuts (new arm, shadows, underside view) | |
+| Relighting the robot cell like the training photos | good nuts accepted 0/9 → only 2/9 | retrained instead |
+| **Retrain on 2,400 robot-cell photos**, two variants (Nebius H100) | full LoRA: 82% top / 87% underside; vision frozen: 49% / 67% | kept the full LoRA |
+| 4-bit vs 8-bit on the T4 | 4-bit scores the same as the H100 and is faster | 4-bit beside Isaac Sim |
+| Real factory photos (MVTec AD, 275 images) | the sim-trained model flags almost everything | stated as a limitation; real photos are next |
+| A plain ResNet-18 on the same photos | about as accurate as the inspector | reported; the case is explanations + generality |
+| 300 extra chip photos; a 2× zoom on the nut (free CNN tests) | no gain at an equal false-alarm rate | no paid retrain; chips are a stated limit |
 
 ## Setup
 
