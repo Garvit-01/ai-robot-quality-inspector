@@ -33,8 +33,8 @@ PIECES = [
     (74.1, 79.2, "footage", 33.6),     # M20 (decision ~38.2 s)
     (79.25, 85.25, "footage", 46.0),   # good M16 (decision ~51.1 s)
     (86.8, 90.85, "footage", 59.5),    # bolt (decision ~63.4 s)
-    (90.85, 100.9, "footage", 70.0),   # last good nut; "every decision comes with a reason"
-    (100.95, 117.7, "thread_intro", 0.3),
+    (90.85, 100.9, "footage", 74.4),   # last good nut (decision ~76.2 s); "every decision comes with a reason"
+    (100.95, 117.7, "thread_intro", 4.8),  # threading; starts later because the line above runs into the card
     (117.9, 129.3, "results", 0.3),
     (129.3, 137.1, "honest", 0.2),
     (138.2, 146.7, "end", 0.3),
