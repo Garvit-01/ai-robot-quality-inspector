@@ -1,6 +1,8 @@
-# Self-Healing Work Cell
+# AI Robot Quality Inspector: Self-Healing Work Cell
 
 **Apache-2.0** · Nebius x NVIDIA Global AI Hackathon 2026 · **Physical AI** track
+
+**▶ Demo video (2:55):** https://www.youtube.com/watch?v=cKjZqjn0SAI
 
 A robot work cell in NVIDIA Isaac Sim that inspects every M16 nut **from the top and from
 below** with a fine-tuned NVIDIA vision model, says **what is wrong and why**, and sorts it:
