@@ -77,6 +77,11 @@ cannot pay for that.
 | Simulation | NVIDIA **Isaac Sim 5.1** (scenes, UR10 sorting line), **Isaac Lab 2.3.2** (threading) | local GPU (Tesla T4) |
 | Threading policy | NVIDIA's pretrained rl_games checkpoint for Factory NutThread | local GPU |
 
+**Where Token Factory sped things up:** one OpenAI-compatible API for every hosted model, so
+comparing 4 Nemotron planner sizes and 5 vision models on the same 120 scenes was a change of
+model name in a config file, with no GPUs to rent or set up; that comparison is what showed
+fine-tuning was needed.
+
 Why the fine-tune runs on AI Cloud and not Token Factory: Token Factory's fine-tuning and
 custom-model hosting take text models only, and the inspector has to look at photos.
 
