@@ -103,7 +103,7 @@ Same nuts, same photos, same verdicts; three ways of deciding (`eval/bench_sorti
 NVIDIA's pretrained NutThread policy, 16 environments × 3 rounds: **47 / 48 threaded (97.9%)**,
 using the task's own physics success check.
 
-### Which model can see what's wrong? (9 compared)
+### Which model can see what's wrong? (8 models compared)
 
 Before building the robot line we measured every candidate on the same 120 held-out scenes,
 with the same prompt and the same scorer. Details and the full tables are in
@@ -129,7 +129,7 @@ spend on another fine-tune for it.
 |---|---|---|
 | **Gemma 3 27B**, untrained, as the first verifier (Token Factory) | 48.3% correct; bad parts shipped 60 → 44 of 60 | looked for a better model |
 | A rewritten prompt aimed at nut sizes and chips | no change (0/6 wrong sizes, 0/4 chips on dev) | concluded it's a seeing problem, not a wording one |
-| 6 more vision models on Token Factory + NVIDIA Nemotron-Nano-12B-v2-VL | best untrained: MiniMax-M3, 75.8% | fine-tuned instead |
+| 4 more vision models on Token Factory (MiniMax-M3, Kimi-K3, DeepSeek-V4.1-Flash, Qwen3.8-27B) + NVIDIA Nemotron-Nano-12B-v2-VL | best untrained: MiniMax-M3, 75.8% | fine-tuned instead |
 | **Fine-tuning NVIDIA Cosmos-Reason1-7B** (LoRA, 1,800 scenes, 97 min on a Nebius H100) | **21.7% → 94.2%**; 93.3% in 4-bit on a T4; 0 of 60 bad parts shipped | made it the inspector |
 | 4 NVIDIA Nemotron sizes as the recovery planner vs a fixed lookup table | identical decisions on all 180 scenes | the robot uses the table; we say so |
 | The Oct 12 model inside the robot cell | rejected most good nuts (new arm, shadows, underside view) | |
